@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Pivot</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #0d1117; color: #e6edf3; }
+
+    .nav-tabs { border-color: #30363d; }
+    .nav-tabs .nav-link { color: #8b949e; border-color: transparent; }
+    .nav-tabs .nav-link:hover { color: #e6edf3; background: #161b22; border-color: transparent; }
+    .nav-tabs .nav-link.active { background: #161b22; color: #58a6ff; border-color: #30363d #30363d #161b22; }
+
+    .badge-up   { background: #1a4731; color: #3fb950; border: 1px solid #238636; }
+    .badge-down { background: #4a1515; color: #f85149; border: 1px solid #da3633; }
+    .badge-tot  { background: #1f2937; color: #8b949e; border: 1px solid #30363d; }
+
+    .table-wrap { overflow: auto; max-height: calc(100vh - 200px); border: 1px solid #30363d; border-radius: 10px; }
+    table.pivot { border-collapse: separate; border-spacing: 0; min-width: 600px; }
+    table.pivot thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: #161b22; color: #8b949e;
+      font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+      padding: 10px 12px; border-bottom: 1px solid #30363d;
+      white-space: nowrap; text-align: center;
+    }
+    table.pivot td.time-col, table.pivot th.time-col {
+      position: sticky; left: 0; z-index: 1;
+      background: #161b22; font-weight: 600; font-size: .85rem; color: #8b949e;
+      padding: 9px 14px; border-right: 1px solid #30363d; white-space: nowrap;
+    }
+    table.pivot thead th.time-col { z-index: 3; }
+    table.pivot td {
+      padding: 7px 12px; text-align: center; font-size: .82rem; font-weight: 600;
+      border-bottom: 1px solid #21262d; white-space: nowrap;
+    }
+    table.pivot tr:last-child td { border-bottom: none; }
+
+    .c-up    { background: #0d2b1a; color: #3fb950; }
+    .c-down  { background: #2b0d0d; color: #f85149; }
+    .c-empty { background: #0d1117; color: #30363d; }
+
+    .panel { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; }
+    .form-label { color: #8b949e; font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+    .form-control, .form-select {
+      background: #0d1117 !important; border: 1px solid #30363d; color: #e6edf3 !important;
+      border-radius: 8px; font-size: .9rem;
+    }
+    .form-control:focus, .form-select:focus { border-color: #58a6ff !important; box-shadow: none !important; }
+    .form-select option { background: #161b22; color: #e6edf3; }
+    .btn-run { background: #1f6feb; border: none; border-radius: 8px; padding: 10px 28px; font-weight: 600; }
+    .btn-run:hover { background: #388bfd; }
+    .btn-overlay { background: #21262d; border: 1px solid #30363d; border-radius: 8px; padding: 6px 16px; font-size: .82rem; color: #c9d1d9; cursor: pointer; }
+    .btn-overlay.on { background: #388bfd; border-color: #388bfd; color: #fff; }
+
+    /* Mode toggle pills */
+    .mode-toggle { display: flex; gap: 0; background: #0d1117; border: 1px solid #30363d; border-radius: 9px; overflow: hidden; }
+    .mode-toggle label {
+      flex: 1; text-align: center; padding: 8px 16px; cursor: pointer;
+      font-size: .78rem; font-weight: 600; color: #8b949e; transition: background .15s, color .15s;
+      user-select: none;
+    }
+    .mode-toggle input[type=radio] { display: none; }
+    .mode-toggle input[type=radio]:checked + label { background: #1f6feb; color: #fff; }
+    .mode-desc { font-size: .72rem; color: #8b949e; margin-top: 8px; min-height: 32px; }
+
+    /* Strategy cards */
+    .strat-card {
+      background: #161b22; border: 2px solid #30363d; border-radius: 12px;
+      padding: 18px 16px; cursor: pointer; transition: border-color .15s, background .15s;
+      height: 100%;
+    }
+    .strat-card:hover  { border-color: #58a6ff; background: #1c2230; }
+    .strat-card.active { border-color: #1f6feb; background: #0d1f3c; }
+    .strat-name { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #8b949e; margin-bottom: 4px; }
+    .strat-desc { font-size: .68rem; color: #484f58; margin-bottom: 12px; min-height: 28px; }
+    .strat-pnl  { font-size: 1.7rem; font-weight: 800; margin-bottom: 6px; line-height: 1; }
+    .strat-meta { font-size: .72rem; color: #8b949e; display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn-analytics {
+      margin-top: 14px; width: 100%;
+      background: #21262d; border: 1px solid #30363d; color: #8b949e;
+      border-radius: 7px; padding: 7px 0; font-size: .78rem; font-weight: 600; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .strat-card:hover .btn-analytics,
+    .strat-card.active .btn-analytics { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+
+    .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px 20px; }
+    .stat-val  { font-size: 1.5rem; font-weight: 700; }
+    .stat-lbl  { font-size: .73rem; color: #8b949e; text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+    .pos { color: #3fb950; } .neg { color: #f85149; } .neu { color: #8b949e; }
+
+    .atbl { width: 100%; font-size: .82rem; border-collapse: collapse; }
+    .atbl th { color: #8b949e; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding: 8px 12px; border-bottom: 1px solid #30363d; text-align: center; white-space: nowrap; }
+    .atbl td { padding: 8px 12px; border-bottom: 1px solid #21262d; text-align: center; }
+    .atbl tr:last-child td { border-bottom: none; }
+    .atbl td:first-child { font-weight: 700; color: #58a6ff; text-align: left; }
+    .atbl .tot-row td { border-top: 2px solid #30363d !important; font-weight: 700; }
+
+    .back-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; border-radius: 8px; padding: 6px 16px; font-size: .85rem; text-decoration: none; }
+    .back-btn:hover { background: #30363d; color: #e6edf3; }
+
+    .detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid #30363d; }
+    .strat-badge { background: #1f6feb; color: #fff; border-radius: 6px; padding: 3px 10px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+  </style>
+</head>
+<body>
+<div class="container-fluid py-3 px-4">
+
+  <!-- Top bar -->
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <a href="/" class="back-btn">← Upload New</a>
+      <div class="d-flex align-items-baseline gap-2">
+        <h5 class="mb-0 fw-bold" style="color:#58a6ff;letter-spacing:.04em">CRYPTO PIVOT</h5>
+        <span style="color:#8b949e;font-size:.8rem">{{ filename }}</span>
+      </div>
+      {% if saved_files %}
+      <div class="d-flex align-items-center gap-2">
+        <select class="form-select form-select-sm" id="fileSwitcher"
+          style="background:#0d1117!important;border:1px solid #30363d;color:#e6edf3!important;border-radius:8px;font-size:.82rem;min-width:220px"
+          onchange="switchFile(this.value)">
+          <option value="" disabled>Switch file…</option>
+          {% for f in saved_files %}
+          <option value="{{ f }}" {% if f == filename %}selected{% endif %}>{{ f }}</option>
+          {% endfor %}
+        </select>
+        <form id="deleteForm" method="post" action="/delete/{{ filename }}">
+          <button type="button" class="btn btn-sm" onclick="confirmDelete()" title="Delete file"
+            style="background:#4a1515;border:1px solid #da3633;color:#f85149;border-radius:8px;padding:5px 10px">🗑</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <span class="badge rounded-pill px-3 py-2 badge-up">▲ Up: {{ up_count }} ({{ up_pct }}%)</span>
+      <span class="badge rounded-pill px-3 py-2 badge-down">▼ Down: {{ down_count }} ({{ 100 - up_pct }}%)</span>
+      <span class="badge rounded-pill px-3 py-2 badge-tot">Total: {{ total }}</span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs mb-0" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabPivot" type="button">Pivot Table</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabSim" type="button">Martingale Sim</button></li>
+  </ul>
+
+  <div class="tab-content">
+
+    <!-- ── PIVOT TABLE ── -->
+    <div class="tab-pane fade show active" id="tabPivot">
+      <div class="py-2 d-flex align-items-center gap-2">
+        <button class="btn-overlay" id="overlayBtn" onclick="toggleOverlay()" style="display:none">Show Sim Overlay</button>
+        <span id="overlayLabel" style="display:none;font-size:.75rem;color:#8b949e"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="pivot">
+          <thead>
+            <tr>
+              <th class="time-col">Time (ET)</th>
+              {% for d in dates %}<th>{{ d }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody id="pivotBody">
+            {% for row in rows %}
+            <tr data-time="{{ row.time }}">
+              <td class="time-col">{{ row.time }}</td>
+              {% for cell in row.cells %}
+                {% if cell == 'Up' %}
+                  <td class="c-up" data-r="Up">▲ Up</td>
+                {% elif cell == 'Down' %}
+                  <td class="c-down" data-r="Down">▼ Down</td>
+                {% else %}
+                  <td class="c-empty" data-r="">—</td>
+                {% endif %}
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── MARTINGALE SIM ── -->
+    <div class="tab-pane fade" id="tabSim">
+      <div class="pt-3">
+
+        <div class="panel mb-3">
+          <div class="row g-3 align-items-start">
+
+            <!-- Mode selector -->
+            <div class="col-md-5">
+              <label class="form-label d-block">Martingale Mode</label>
+              <div class="mode-toggle">
+                <input type="radio" name="simMode" id="modeDaywise" value="daywise" checked onchange="updateModeDesc()">
+                <label for="modeDaywise">Day-wise Martingale</label>
+                <input type="radio" name="simMode" id="modeSimple" value="simple" onchange="updateModeDesc()">
+                <label for="modeSimple">Simple Martingale</label>
+              </div>
+              <div class="mode-desc" id="modeDesc">
+                Each time slot runs its own independent Martingale across dates.
+                12AM Jan 1 loss → next bet at 12AM Jan 2 advances the step.
+                1AM is a completely separate session.
+              </div>
+            </div>
+
+            <!-- Ladder -->
+            <div class="col-md-4">
+              <label class="form-label d-block">Ladder <span style="font-weight:400;text-transform:none">(comma-separated units)</span></label>
+              <input class="form-control" id="ladderIn" value="1, 3, 9">
+              <div class="mt-1" style="font-size:.72rem;color:#8b949e">
+                Win → reset to step 1 &bull; Lose → advance step &bull; Bust on last step → reset
+              </div>
+            </div>
+
+            <!-- Run button -->
+            <div class="col-md-3 d-flex align-items-end">
+              <button class="btn btn-run text-white w-100" onclick="runAllSims()">Run Simulation</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Strategy overview cards -->
+        <div id="stratCompare" style="display:none">
+          <div class="mb-2" style="font-size:.72rem;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;font-weight:700">
+            All Strategies — click Analytics to see full breakdown
+          </div>
+          <div class="row g-3 mb-4" id="stratCards"></div>
+        </div>
+
+        <!-- Detailed analytics -->
+        <div id="simDetails" style="display:none">
+          <div class="panel mb-3">
+            <div class="detail-header">
+              <span class="strat-badge" id="detailBadge"></span>
+              <span style="font-size:.82rem;color:#8b949e" id="detailDesc"></span>
+            </div>
+            <div class="row g-3" id="detailCards"></div>
+          </div>
+          <div class="panel mb-3">
+            <div class="mb-2" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+              Ladder Step Breakdown &nbsp;<span style="font-weight:400;text-transform:none">(WIN vs LOSS per step &middot; % = win rate at that step)</span>
+            </div>
+            <div style="position:relative;height:260px"><canvas id="stepChart"></canvas></div>
+          </div>
+          <div class="panel">
+            <div class="mb-3" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">Per Time Slot Analytics</div>
+            <div style="overflow-x:auto"><table class="atbl" id="slotTbl"></table></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+var DATES = {{ dates | tojson }};
+var ROWS  = {{ rows  | tojson }};
+
+var STRATS      = ['all_up', 'all_down', 'same', 'opposite'];
+var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite' };
+var STRAT_DESCS  = {
+  all_up:   'Always bet Up on every candle',
+  all_down: 'Always bet Down on every candle',
+  same:     'Follow the previous candle\'s direction (momentum)',
+  opposite: 'Fade the previous candle\'s direction (reversal)'
+};
+
+var allSimResults = {};
+var selectedStrat = null;
+var overlayOn     = false;
+var stepChartInst = null;
+var currentLadder = [];
+
+// ─── Mode description text ───
+function updateModeDesc() {
+  var mode = document.querySelector('input[name="simMode"]:checked').value;
+  document.getElementById('modeDesc').textContent = mode === 'daywise'
+    ? 'Each time slot runs its own independent Martingale across dates. 12AM Jan 1 loss → next bet at 12AM Jan 2 advances the step. 1AM is a completely separate session.'
+    : 'One continuous Martingale session across ALL candles in chronological order. A loss at 12AM advances the step for the very next candle (1AM same day).';
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DAY-WISE MARTINGALE
+// Each time slot (row) is an independent Martingale session.
+// Within a row the session runs across dates in order:
+//   Jan 1 → Jan 2 → Jan 3 → ...
+// The step carries only within the same time slot.
+//
+// "Same" / "Opposite": prevRes = previous DATE's result at THIS
+// same time slot (e.g. at 12AM Jan 3 you look at 12AM Jan 2).
+// First date of each slot is skipped (no prior reference).
+// ─────────────────────────────────────────────────────────────────
+function simulateDaywise(strategy, ladder) {
+  var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
+  var grandSteps = [], grandStepWins = [];
+  for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
+
+  var overlaysMap = {};
+  var slotMap     = {};
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var t = ROWS[ri].time;
+    var arr = [], stc = [];
+    for (var di = 0; di < DATES.length; di++) arr.push(null);
+    for (var si = 0; si < ladder.length; si++) stc.push(0);
+    overlaysMap[t] = arr;
+    slotMap[t]     = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
+  }
+
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var row     = ROWS[ri];
+    var step    = 0;      // step resets for each time slot
+    var prevRes = null;   // prevRes resets for each time slot
+
+    for (var di = 0; di < DATES.length; di++) {
+      var actual = row.cells[di];
+
+      // Skip missing / non-Up-Down cells without touching step or prevRes
+      if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
+
+      // same/opposite: skip first date of this slot (no prior day reference)
+      if (strategy === 'same' || strategy === 'opposite') {
+        if (!prevRes) { prevRes = actual; continue; }
+      }
+
+      var betDir;
+      if      (strategy === 'all_up')   { betDir = 'Up'; }
+      else if (strategy === 'all_down') { betDir = 'Down'; }
+      else if (strategy === 'same')     { betDir = prevRes; }
+      else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
+
+      var betAmt  = ladder[step];
+      var curStep = step;
+
+      grandSteps[curStep]++; grandBets++;
+      slotMap[row.time].stepCts[curStep]++;
+      slotMap[row.time].total++;
+
+      var won  = (betDir === actual);
+      var bust = false;
+
+      if (won) {
+        grandPnl += betAmt; grandWins++;
+        grandStepWins[curStep]++;
+        slotMap[row.time].pnl  += betAmt;
+        slotMap[row.time].wins++;
+        step = 0;
+      } else {
+        grandPnl -= betAmt;
+        slotMap[row.time].pnl -= betAmt;
+        slotMap[row.time].losses++;
+        if (step >= ladder.length - 1) {
+          bust = true; grandBusts++;
+          slotMap[row.time].busts++;
+          step = 0;
+        } else {
+          step++;
+        }
+      }
+
+      overlaysMap[row.time][di] = { won: won, bust: bust, bet: betAmt };
+      prevRes = actual;
+    }
+  }
+
+  var slotResults = [];
+  for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
+  return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
+           grandSteps: grandSteps, grandStepWins: grandStepWins,
+           slotResults: slotResults, overlaysMap: overlaysMap };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// SIMPLE MARTINGALE
+// One continuous session across all candles in true chronological
+// order: date-by-date, hour-by-hour within each date.
+// A loss at 12AM advances the step for the 1AM bet.
+// ─────────────────────────────────────────────────────────────────
+function simulateSimple(strategy, ladder) {
+  var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
+  var grandSteps = [], grandStepWins = [];
+  for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
+
+  var overlaysMap = {};
+  var slotMap     = {};
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var t = ROWS[ri].time;
+    var arr = [], stc = [];
+    for (var di = 0; di < DATES.length; di++) arr.push(null);
+    for (var si = 0; si < ladder.length; si++) stc.push(0);
+    overlaysMap[t] = arr;
+    slotMap[t]     = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
+  }
+
+  var step    = 0;
+  var prevRes = null;
+
+  // Outer = date, inner = time slot → true chronological order
+  for (var di = 0; di < DATES.length; di++) {
+    for (var ri = 0; ri < ROWS.length; ri++) {
+      var row    = ROWS[ri];
+      var actual = row.cells[di];
+
+      if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
+
+      if (strategy === 'same' || strategy === 'opposite') {
+        if (!prevRes) { prevRes = actual; continue; }
+      }
+
+      var betDir;
+      if      (strategy === 'all_up')   { betDir = 'Up'; }
+      else if (strategy === 'all_down') { betDir = 'Down'; }
+      else if (strategy === 'same')     { betDir = prevRes; }
+      else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
+
+      var betAmt  = ladder[step];
+      var curStep = step;
+
+      grandSteps[curStep]++; grandBets++;
+      slotMap[row.time].stepCts[curStep]++;
+      slotMap[row.time].total++;
+
+      var won  = (betDir === actual);
+      var bust = false;
+
+      if (won) {
+        grandPnl += betAmt; grandWins++;
+        grandStepWins[curStep]++;
+        slotMap[row.time].pnl  += betAmt;
+        slotMap[row.time].wins++;
+        step = 0;
+      } else {
+        grandPnl -= betAmt;
+        slotMap[row.time].pnl -= betAmt;
+        slotMap[row.time].losses++;
+        if (step >= ladder.length - 1) {
+          bust = true; grandBusts++;
+          slotMap[row.time].busts++;
+          step = 0;
+        } else {
+          step++;
+        }
+      }
+
+      overlaysMap[row.time][di] = { won: won, bust: bust, bet: betAmt };
+      prevRes = actual;
+    }
+  }
+
+  var slotResults = [];
+  for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
+  return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
+           grandSteps: grandSteps, grandStepWins: grandStepWins,
+           slotResults: slotResults, overlaysMap: overlaysMap };
+}
+
+// ─── Run all 4 strategies with selected mode ───
+function runAllSims() {
+  var ladder = parseLadder();
+  if (!ladder) return;
+  currentLadder = ladder;
+
+  var mode = document.querySelector('input[name="simMode"]:checked').value;
+  var engine = (mode === 'daywise') ? simulateDaywise : simulateSimple;
+
+  allSimResults = {};
+  for (var i = 0; i < STRATS.length; i++) {
+    allSimResults[STRATS[i]] = engine(STRATS[i], ladder);
+  }
+
+  renderStratCards();
+  document.getElementById('stratCompare').style.display = 'block';
+  showAnalytics('all_up');
+}
+
+// ─── Overview cards ───
+function renderStratCards() {
+  var html = '';
+  for (var i = 0; i < STRATS.length; i++) {
+    var s    = STRATS[i];
+    var r    = allSimResults[s];
+    var wr   = r.grandBets > 0 ? (r.grandWins / r.grandBets * 100).toFixed(1) : '0.0';
+    var pnlS = (r.grandPnl >= 0 ? '+' : '') + r.grandPnl.toFixed(2);
+    var pnlC = r.grandPnl > 0 ? 'pos' : r.grandPnl < 0 ? 'neg' : 'neu';
+    var buC  = r.grandBusts > 0 ? 'neg' : 'pos';
+
+    html += '<div class="col-6 col-md-3">'
+          + '<div class="strat-card" id="scard_' + s + '" onclick="showAnalytics(\'' + s + '\')">'
+          + '<div class="strat-name">' + STRAT_LABELS[s] + '</div>'
+          + '<div class="strat-desc">' + STRAT_DESCS[s] + '</div>'
+          + '<div class="strat-pnl ' + pnlC + '">' + pnlS + '</div>'
+          + '<div class="strat-meta">'
+          + '<span>Win <strong>' + wr + '%</strong></span>'
+          + '<span>Bets <strong>' + r.grandBets + '</strong></span>'
+          + '<span class="' + buC + '">Busts <strong>' + r.grandBusts + '</strong></span>'
+          + '</div>'
+          + '<button class="btn-analytics">Analytics ↓</button>'
+          + '</div></div>';
+  }
+  document.getElementById('stratCards').innerHTML = html;
+}
+
+// ─── Detailed analytics ───
+function showAnalytics(strat) {
+  selectedStrat = strat;
+
+  for (var i = 0; i < STRATS.length; i++) {
+    var el = document.getElementById('scard_' + STRATS[i]);
+    if (el) el.className = 'strat-card' + (STRATS[i] === strat ? ' active' : '');
+  }
+
+  var r = allSimResults[strat];
+  document.getElementById('detailBadge').textContent = STRAT_LABELS[strat];
+  document.getElementById('detailDesc').textContent  = STRAT_DESCS[strat];
+
+  renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder);
+  renderBars(r.grandSteps, r.grandStepWins, currentLadder);
+  renderSlotTable(r.slotResults, currentLadder);
+
+  document.getElementById('simDetails').style.display = 'block';
+
+  overlayOn = false;
+  var btn = document.getElementById('overlayBtn');
+  btn.style.display = 'inline-block';
+  btn.className     = 'btn-overlay';
+  btn.textContent   = 'Show Sim Overlay';
+  var lbl = document.getElementById('overlayLabel');
+  lbl.style.display = 'inline';
+  lbl.textContent   = '(' + STRAT_LABELS[strat] + ')';
+  paintOriginal();
+
+  document.getElementById('simDetails').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ─── Stat cards ───
+function renderDetailCards(pnl, busts, bets, wins, ladder) {
+  var wr  = bets > 0 ? (wins / bets * 100).toFixed(1) : '0.0';
+  var mr  = ladder.reduce(function(a, b) { return a + b; }, 0).toFixed(2);
+  var pS  = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+  var pC  = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neu';
+  document.getElementById('detailCards').innerHTML =
+    dc(pS,                      'Total PnL (units)',             pC) +
+    dc(busts,                   'Total Busts',                   busts > 0 ? 'neg' : 'pos') +
+    dc(wr + '%',                'Win Rate (' + wins + '/' + bets + ')', parseFloat(wr) >= 50 ? 'pos' : 'neg') +
+    dc(ladder.length + ' steps','Ladder · Max risk: ' + mr,     'neu');
+}
+function dc(v, l, c) {
+  return '<div class="col-6 col-md-3"><div class="stat-card"><div class="stat-val ' + c + '">' + v + '</div><div class="stat-lbl">' + l + '</div></div></div>';
+}
+
+// ─── Step bar chart ───
+var winRateLabelPlugin = {
+  id: 'wrl',
+  afterDatasetsDraw: function(chart) {
+    var ctx = chart.ctx, m0 = chart.getDatasetMeta(0), m1 = chart.getDatasetMeta(1);
+    var wd  = chart.data.datasets[0].data, ld = chart.data.datasets[1].data;
+    ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    for (var i = 0; i < m0.data.length; i++) {
+      var wb = m0.data[i], lb = m1.data[i], w = wd[i], l = ld[i], t = w + l;
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillStyle = '#3fb950'; ctx.fillText(w, wb.x, wb.y - 4);
+      ctx.fillStyle = '#f85149'; ctx.fillText(l, lb.x, lb.y - 4);
+      if (t > 0) { ctx.fillStyle = '#f0a500'; ctx.fillText(Math.round(w / t * 100) + '%', (wb.x + lb.x) / 2, Math.min(wb.y, lb.y) - 18); }
+    }
+    ctx.restore();
+  }
+};
+
+function renderBars(gs, gsw, ladder) {
+  var labels = [], winD = [], lossD = [];
+  for (var i = 0; i < ladder.length; i++) {
+    labels.push('Step ' + (i + 1) + '\n' + ladder[i] + 'u');
+    winD.push(gsw[i]); lossD.push(gs[i] - gsw[i]);
+  }
+  if (stepChartInst) { stepChartInst.destroy(); stepChartInst = null; }
+  stepChartInst = new Chart(document.getElementById('stepChart').getContext('2d'), {
+    type: 'bar',
+    data: { labels: labels, datasets: [
+      { label: 'WIN',  data: winD,  backgroundColor: '#3fb950', borderRadius: 4, borderSkipped: false },
+      { label: 'LOSS', data: lossD, backgroundColor: '#f85149', borderRadius: 4, borderSkipped: false }
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: {
+        legend: { position: 'top', align: 'end', labels: { color: '#c9d1d9', font: { size: 12 }, boxWidth: 14, padding: 16 } },
+        tooltip: { callbacks: { footer: function(it) {
+          var w = it[0].chart.data.datasets[0].data[it[0].dataIndex];
+          var l = it[0].chart.data.datasets[1].data[it[0].dataIndex];
+          var t = w + l; return t > 0 ? 'Win rate: ' + Math.round(w / t * 100) + '%' : '';
+        }}}
+      },
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e', font: { size: 12 } } },
+        y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' }, beginAtZero: true,
+             title: { display: true, text: 'Trades', color: '#8b949e', font: { size: 12 } } }
+      },
+      layout: { padding: { top: 28 } }
+    },
+    plugins: [winRateLabelPlugin]
+  });
+}
+
+// ─── Per-slot table ───
+function renderSlotTable(sr, ladder) {
+  var sh = '';
+  for (var i = 0; i < ladder.length; i++)
+    sh += '<th>Step ' + (i + 1) + '<br><small style="font-weight:400;color:#555">(' + ladder[i] + 'u)</small></th>';
+
+  var html = '<thead><tr><th style="text-align:left">Time Slot</th><th>Bets</th><th>Wins</th><th>Win%</th><th>PnL</th><th>Busts</th>' + sh + '</tr></thead><tbody>';
+  var tB = 0, tW = 0, tP = 0, tBu = 0, tS = [];
+  for (var i = 0; i < ladder.length; i++) tS.push(0);
+
+  for (var i = 0; i < sr.length; i++) {
+    var s  = sr[i];
+    var wr = s.total > 0 ? (s.wins / s.total * 100).toFixed(1) + '%' : '—';
+    var pc = s.pnl > 0 ? 'pos' : s.pnl < 0 ? 'neg' : 'neu';
+    var ps = (s.pnl >= 0 ? '+' : '') + s.pnl.toFixed(2);
+    var bc = s.busts > 0 ? 'neg' : 'pos';
+    var stc = '';
+    for (var j = 0; j < s.stepCts.length; j++) { stc += '<td>' + s.stepCts[j] + '</td>'; tS[j] += s.stepCts[j]; }
+    html += '<tr><td>' + s.time + '</td><td>' + s.total + '</td><td>' + s.wins + '</td>'
+          + '<td>' + wr + '</td><td class="' + pc + '">' + ps + '</td>'
+          + '<td class="' + bc + '">' + s.busts + '</td>' + stc + '</tr>';
+    tB += s.total; tW += s.wins; tP += s.pnl; tBu += s.busts;
+  }
+
+  var tWr = tB > 0 ? (tW / tB * 100).toFixed(1) + '%' : '—';
+  var tPc = tP > 0 ? 'pos' : tP < 0 ? 'neg' : 'neu';
+  var tPs = (tP >= 0 ? '+' : '') + tP.toFixed(2);
+  var tBc = tBu > 0 ? 'neg' : 'pos';
+  var tSc = '';
+  for (var j = 0; j < tS.length; j++) tSc += '<td><strong>' + tS[j] + '</strong></td>';
+  html += '<tr class="tot-row"><td>TOTAL</td><td><strong>' + tB + '</strong></td><td><strong>' + tW + '</strong></td>'
+        + '<td><strong>' + tWr + '</strong></td><td class="' + tPc + '"><strong>' + tPs + '</strong></td>'
+        + '<td class="' + tBc + '"><strong>' + tBu + '</strong></td>' + tSc + '</tr></tbody>';
+  document.getElementById('slotTbl').innerHTML = html;
+}
+
+// ─── Pivot overlay ───
+function toggleOverlay() {
+  overlayOn = !overlayOn;
+  var btn = document.getElementById('overlayBtn');
+  if (overlayOn) { btn.className = 'btn-overlay on'; btn.textContent = 'Show Original'; paintOverlay(); }
+  else           { btn.className = 'btn-overlay';    btn.textContent = 'Show Sim Overlay'; paintOriginal(); }
+}
+
+function paintOriginal() {
+  var rows = document.getElementById('pivotBody').rows;
+  for (var r = 0; r < rows.length; r++) {
+    var cells = rows[r].cells;
+    for (var c = 1; c < cells.length; c++) {
+      var td = cells[c], res = td.getAttribute('data-r');
+      if      (res === 'Up')   { td.className = 'c-up';    td.textContent = '▲ Up'; }
+      else if (res === 'Down') { td.className = 'c-down';  td.textContent = '▼ Down'; }
+      else                     { td.className = 'c-empty'; td.textContent = '—'; }
+    }
+  }
+}
+
+// Background = actual market direction (green Up, red Down).
+// Text = W / L / BUST with contrasting colour so both pieces of info are visible.
+function paintOverlay() {
+  if (!selectedStrat || !allSimResults[selectedStrat]) return;
+  var ovMap = allSimResults[selectedStrat].overlaysMap;
+  var rows  = document.getElementById('pivotBody').rows;
+
+  for (var r = 0; r < rows.length; r++) {
+    var time  = rows[r].getAttribute('data-time');
+    var ovs   = ovMap[time];
+    if (!ovs) continue;
+
+    var cells = rows[r].cells;
+    for (var c = 1; c < cells.length; c++) {
+      var td  = cells[c];
+      var ov  = ovs[c - 1];                 // c-1 = date index (col 0 = time label)
+      var res = td.getAttribute('data-r');  // actual market direction
+
+      // Keep background = actual direction
+      if      (res === 'Up')   td.className = 'c-up';
+      else if (res === 'Down') td.className = 'c-down';
+      else                     td.className = 'c-empty';
+
+      if (!ov) {
+        // No bet (skipped first date for same/opposite, or empty cell)
+        td.textContent = (res === 'Up') ? '▲ Up' : (res === 'Down') ? '▼ Down' : '—';
+        continue;
+      }
+
+      if (ov.bust) {
+        td.innerHTML = '<span style="color:#f0883e;font-weight:800">BUST&nbsp;&minus;' + ov.bet + '</span>';
+      } else if (ov.won) {
+        td.innerHTML = '<span style="color:#7ee787;font-weight:700">W&nbsp;+' + ov.bet + '</span>';
+      } else {
+        td.innerHTML = '<span style="color:#ff7b72;font-weight:700">L&nbsp;&minus;' + ov.bet + '</span>';
+      }
+    }
+  }
+}
+
+// ─── Helpers ───
+function parseLadder() {
+  var arr = document.getElementById('ladderIn').value
+              .split(',').map(function(x) { return parseFloat(x.trim()); })
+              .filter(function(x) { return !isNaN(x) && x > 0; });
+  if (!arr.length) { alert('Enter a valid ladder, e.g. 1, 3, 9'); return null; }
+  return arr;
+}
+function switchFile(name)  { if (name) window.location.href = '/load/' + encodeURIComponent(name); }
+function confirmDelete() {
+  var sel = document.getElementById('fileSwitcher'), name = sel ? sel.value : '';
+  if (!name) return;
+  if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
+  var form = document.getElementById('deleteForm');
+  form.action = '/delete/' + encodeURIComponent(name); form.submit();
+}
+</script>
+</body>
+</html>
