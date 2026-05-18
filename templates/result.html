@@ -195,14 +195,20 @@
               <label class="form-label d-block">Martingale Mode</label>
               <div class="mode-toggle">
                 <input type="radio" name="simMode" id="modeDaywise" value="daywise" checked onchange="updateModeDesc()">
-                <label for="modeDaywise">Day-wise Martingale</label>
+                <label for="modeDaywise">Day-wise</label>
                 <input type="radio" name="simMode" id="modeSimple" value="simple" onchange="updateModeDesc()">
-                <label for="modeSimple">Simple Martingale</label>
+                <label for="modeSimple">Simple</label>
+                <input type="radio" name="simMode" id="modeMenbased" value="menbased" onchange="updateModeDesc()">
+                <label for="modeMenbased">Men-Based</label>
               </div>
               <div class="mode-desc" id="modeDesc">
                 Each time slot runs its own independent Martingale across dates.
                 12AM Jan 1 loss → next bet at 12AM Jan 2 advances the step.
                 1AM is a completely separate session.
+              </div>
+              <div id="menCountRow" style="display:none;margin-top:10px">
+                <label class="form-label">Number of Men <span style="font-weight:400;text-transform:none">(min 2)</span></label>
+                <input class="form-control" type="number" id="menCount" value="2" min="2" max="20" style="width:100px">
               </div>
             </div>
 
@@ -281,9 +287,14 @@ var currentLadder = [];
 // ─── Mode description text ───
 function updateModeDesc() {
   var mode = document.querySelector('input[name="simMode"]:checked').value;
-  document.getElementById('modeDesc').textContent = mode === 'daywise'
-    ? 'Each time slot runs its own independent Martingale across dates. 12AM Jan 1 loss → next bet at 12AM Jan 2 advances the step. 1AM is a completely separate session.'
-    : 'One continuous Martingale session across ALL candles in chronological order. A loss at 12AM advances the step for the very next candle (1AM same day).';
+  var menRow = document.getElementById('menCountRow');
+  menRow.style.display = mode === 'menbased' ? 'block' : 'none';
+  var desc = {
+    daywise:  'Each time slot runs its own independent Martingale across dates. 12AM Jan 1 loss → next bet at 12AM Jan 2 advances the step. 1AM is a completely separate session.',
+    simple:   'One continuous Martingale session across ALL candles in chronological order. A loss at 12AM advances the step for the very next candle (1AM same day).',
+    menbased: 'Candles are dealt round-robin to N men. Man 1 gets candles 1, N+1, 2N+1 … Man 2 gets 2, N+2, 2N+2 … Each man runs his own independent Martingale and never shares his step counter.'
+  };
+  document.getElementById('modeDesc').textContent = desc[mode];
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -460,6 +471,99 @@ function simulateSimple(strategy, ladder) {
            slotResults: slotResults, overlaysMap: overlaysMap };
 }
 
+// ─────────────────────────────────────────────────────────────────
+// MEN-BASED MARTINGALE
+// All valid candles are collected in chronological order (date outer,
+// time inner), then dealt round-robin to numMen men.
+// Man m receives candles m, m+N, m+2N, … (0-indexed).
+// Each man runs a completely independent Martingale on his subset.
+// ─────────────────────────────────────────────────────────────────
+function simulateMenBased(strategy, ladder, numMen) {
+  var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
+  var grandSteps = [], grandStepWins = [];
+  for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
+
+  var overlaysMap = {};
+  var slotMap = {};
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var t = ROWS[ri].time;
+    var arr = [], stc = [];
+    for (var di = 0; di < DATES.length; di++) arr.push(null);
+    for (var si = 0; si < ladder.length; si++) stc.push(0);
+    overlaysMap[t] = arr;
+    slotMap[t] = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
+  }
+
+  // Collect all valid candles chronologically
+  var allEvents = [];
+  for (var di = 0; di < DATES.length; di++) {
+    for (var ri = 0; ri < ROWS.length; ri++) {
+      var actual = ROWS[ri].cells[di];
+      if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
+      allEvents.push({ time: ROWS[ri].time, di: di, actual: actual });
+    }
+  }
+
+  // Distribute round-robin to each man
+  var manEvents = [];
+  for (var m = 0; m < numMen; m++) manEvents.push([]);
+  for (var i = 0; i < allEvents.length; i++) manEvents[i % numMen].push(allEvents[i]);
+
+  // Simulate each man independently
+  for (var m = 0; m < numMen; m++) {
+    var step = 0, prevRes = null;
+    var events = manEvents[m];
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      var actual = ev.actual;
+
+      if (strategy === 'same' || strategy === 'opposite') {
+        if (!prevRes) { prevRes = actual; continue; }
+      }
+
+      var betDir;
+      if      (strategy === 'all_up')   { betDir = 'Up'; }
+      else if (strategy === 'all_down') { betDir = 'Down'; }
+      else if (strategy === 'same')     { betDir = prevRes; }
+      else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
+
+      var betAmt = ladder[step], curStep = step;
+
+      grandSteps[curStep]++; grandBets++;
+      slotMap[ev.time].stepCts[curStep]++;
+      slotMap[ev.time].total++;
+
+      var won = (betDir === actual), bust = false;
+      if (won) {
+        grandPnl += betAmt; grandWins++;
+        grandStepWins[curStep]++;
+        slotMap[ev.time].pnl += betAmt;
+        slotMap[ev.time].wins++;
+        step = 0;
+      } else {
+        grandPnl -= betAmt;
+        slotMap[ev.time].pnl -= betAmt;
+        slotMap[ev.time].losses++;
+        if (step >= ladder.length - 1) {
+          bust = true; grandBusts++;
+          slotMap[ev.time].busts++;
+          step = 0;
+        } else {
+          step++;
+        }
+      }
+      overlaysMap[ev.time][ev.di] = { won: won, bust: bust, bet: betAmt, man: m + 1 };
+      prevRes = actual;
+    }
+  }
+
+  var slotResults = [];
+  for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
+  return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
+           grandSteps: grandSteps, grandStepWins: grandStepWins,
+           slotResults: slotResults, overlaysMap: overlaysMap, numMen: numMen };
+}
+
 // ─── Run all 4 strategies with selected mode ───
 function runAllSims() {
   var ladder = parseLadder();
@@ -467,7 +571,14 @@ function runAllSims() {
   currentLadder = ladder;
 
   var mode = document.querySelector('input[name="simMode"]:checked').value;
-  var engine = (mode === 'daywise') ? simulateDaywise : simulateSimple;
+  var engine;
+  if (mode === 'menbased') {
+    var numMen = parseInt(document.getElementById('menCount').value, 10);
+    if (isNaN(numMen) || numMen < 2) { alert('Men-Based requires at least 2 men.'); return; }
+    engine = function(s, l) { return simulateMenBased(s, l, numMen); };
+  } else {
+    engine = (mode === 'daywise') ? simulateDaywise : simulateSimple;
+  }
 
   allSimResults = {};
   for (var i = 0; i < STRATS.length; i++) {
@@ -517,7 +628,8 @@ function showAnalytics(strat) {
 
   var r = allSimResults[strat];
   document.getElementById('detailBadge').textContent = STRAT_LABELS[strat];
-  document.getElementById('detailDesc').textContent  = STRAT_DESCS[strat];
+  var descSuffix = r.numMen ? ' · ' + r.numMen + ' men' : '';
+  document.getElementById('detailDesc').textContent  = STRAT_DESCS[strat] + descSuffix;
 
   renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder);
   renderBars(r.grandSteps, r.grandStepWins, currentLadder);
@@ -692,12 +804,13 @@ function paintOverlay() {
         continue;
       }
 
+      var mTag = ov.man ? '<span style="font-size:.65rem;color:#8b949e;font-weight:400"> M' + ov.man + '</span>' : '';
       if (ov.bust) {
-        td.innerHTML = '<span style="color:#f0883e;font-weight:800">BUST&nbsp;&minus;' + ov.bet + '</span>';
+        td.innerHTML = '<span style="color:#f0883e;font-weight:800">BUST&nbsp;&minus;' + ov.bet + mTag + '</span>';
       } else if (ov.won) {
-        td.innerHTML = '<span style="color:#7ee787;font-weight:700">W&nbsp;+' + ov.bet + '</span>';
+        td.innerHTML = '<span style="color:#7ee787;font-weight:700">W&nbsp;+' + ov.bet + mTag + '</span>';
       } else {
-        td.innerHTML = '<span style="color:#ff7b72;font-weight:700">L&nbsp;&minus;' + ov.bet + '</span>';
+        td.innerHTML = '<span style="color:#ff7b72;font-weight:700">L&nbsp;&minus;' + ov.bet + mTag + '</span>';
       }
     }
   }
