@@ -32,6 +32,15 @@ def parse_question_15m(question):
     month = MONTHS.get(m.group(1).lower())
     return month, int(m.group(2)), m.group(3).upper()
 
+def parse_question_4h(question):
+    # Matches "- January 1, 12AM-4AM ET" style ranges
+    m = re.search(r'-\s+(\w+)\s+(\d+),\s+(\d+(?:AM|PM))-\d+(?:AM|PM)\s+ET', question, re.IGNORECASE)
+    if not m:
+        # Fallback: plain hour like 1h format
+        return parse_question_1h(question)
+    month = MONTHS.get(m.group(1).lower())
+    return month, int(m.group(2)), m.group(3).upper()
+
 def time_to_minutes(t):
     m = re.match(r'(\d+)(?::(\d+))?(AM|PM)', t, re.IGNORECASE)
     if not m:
@@ -45,8 +54,10 @@ def time_to_minutes(t):
 
 def detect_timeframe(df):
     slugs = df['Slug'].dropna().astype(str)
-    if slugs.str.contains('eth-updown-15m-', case=False).any():
+    if slugs.str.contains(r'-15m-', case=False, regex=True).any():
         return '15m'
+    if slugs.str.contains(r'-4h-', case=False, regex=True).any():
+        return '4h'
     return '1h'
 
 def process_csv(content):
@@ -56,7 +67,12 @@ def process_csv(content):
     df = df.dropna(subset=['_edt', 'Resolution Result'])
 
     timeframe = detect_timeframe(df)
-    parse_question = parse_question_15m if timeframe == '15m' else parse_question_1h
+    if timeframe == '15m':
+        parse_question = parse_question_15m
+    elif timeframe == '4h':
+        parse_question = parse_question_4h
+    else:
+        parse_question = parse_question_1h
 
     records = []
     for _, row in df.iterrows():

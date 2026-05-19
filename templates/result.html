@@ -215,7 +215,7 @@
             <!-- Ladder -->
             <div class="col-md-3">
               <label class="form-label d-block">Ladder <span style="font-weight:400;text-transform:none">(comma-separated units)</span></label>
-              <input class="form-control" id="ladderIn" value="1, 3, 9">
+              <input class="form-control" id="ladderIn" value="1, 3, 9, 27">
               <div class="mt-1" style="font-size:.72rem;color:#8b949e">
                 Win → reset to step 1 &bull; Lose → advance step &bull; Bust on last step → reset
               </div>
@@ -846,7 +846,7 @@ function parseLadder() {
   var arr = document.getElementById('ladderIn').value
               .split(',').map(function(x) { return parseFloat(x.trim()); })
               .filter(function(x) { return !isNaN(x) && x > 0; });
-  if (!arr.length) { alert('Enter a valid ladder, e.g. 1, 3, 9'); return null; }
+  if (!arr.length) { alert('Enter a valid ladder, e.g. 1, 3, 9, 27'); return null; }
   return arr;
 }
 function switchFile(name)  { if (name) window.location.href = '/load/' + encodeURIComponent(name); }
