@@ -33,8 +33,8 @@ def parse_question_15m(question):
     return month, int(m.group(2)), m.group(3).upper()
 
 def parse_question_4h(question):
-    # Matches "- January 1, 12AM-4AM ET" style ranges
-    m = re.search(r'-\s+(\w+)\s+(\d+),\s+(\d+(?:AM|PM))-\d+(?:AM|PM)\s+ET', question, re.IGNORECASE)
+    # Matches "- January 1, 8:00AM-12:00PM ET" or "- January 1, 12AM-4AM ET" style ranges
+    m = re.search(r'-\s+(\w+)\s+(\d+),\s+(\d+(?::\d+)?(?:AM|PM))-\d+(?::\d+)?(?:AM|PM)\s+ET', question, re.IGNORECASE)
     if not m:
         # Fallback: plain hour like 1h format
         return parse_question_1h(question)

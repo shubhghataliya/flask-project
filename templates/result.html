@@ -104,6 +104,14 @@
 
     .detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid #30363d; }
     .strat-badge { background: #1f6feb; color: #fff; border-radius: 6px; padding: 3px 10px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+
+    .ist-card { background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 18px 20px; }
+    .ist-band-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8b949e; margin-bottom: 6px; }
+    .ist-pnl { font-size: 1.55rem; font-weight: 800; line-height: 1.1; margin-bottom: 10px; }
+    .ist-meta { display: flex; gap: 18px; flex-wrap: wrap; }
+    .ist-meta-item { display: flex; flex-direction: column; }
+    .ist-meta-val { font-size: .88rem; font-weight: 700; color: #e6edf3; }
+    .ist-meta-lbl { font-size: .65rem; color: #8b949e; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 1px; }
   </style>
 </head>
 <body>
@@ -260,6 +268,26 @@
             </div>
             <div style="position:relative;height:260px"><canvas id="stepChart"></canvas></div>
           </div>
+          <!-- IST Time Slot Performance -->
+          <div class="panel mb-3" id="istSection" style="display:none">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+              <div style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+                Time Slot Performance (IST) &nbsp;<span style="font-weight:400;text-transform:none;color:#484f58">IST = ET + 10h 30m</span>
+              </div>
+            </div>
+            <div class="row g-3 mb-4" id="istCards"></div>
+            <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Time Band</div>
+            <div style="position:relative;height:200px"><canvas id="istPnlChart"></canvas></div>
+          </div>
+
+          <!-- Cumulative PNL -->
+          <div class="panel mb-3" id="cumPnlSection" style="display:none">
+            <div class="mb-2" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+              Cumulative PNL Over Time
+            </div>
+            <div style="position:relative;height:280px"><canvas id="cumPnlChart"></canvas></div>
+          </div>
+
           <div class="panel">
             <div class="mb-3" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">Per Time Slot Analytics</div>
             <div style="overflow-x:auto"><table class="atbl" id="slotTbl"></table></div>
@@ -291,7 +319,16 @@ var allSimResults = {};
 var selectedStrat = null;
 var overlayOn     = false;
 var stepChartInst = null;
+var istPnlChartInst  = null;
+var cumPnlChartInst  = null;
 var currentLadder = [];
+
+var IST_BANDS = [
+  { label: '12 AM - 6 AM', color: '#58a6ff' },
+  { label: '6 AM - 12 PM', color: '#3fb950' },
+  { label: '12 PM - 6 PM', color: '#f0a500' },
+  { label: '6 PM - 12 AM', color: '#d2a8ff' }
+];
 
 // ─── Mode description text ───
 function updateModeDesc() {
@@ -656,6 +693,7 @@ function showAnalytics(strat) {
 
   renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder);
   renderBars(r.grandSteps, r.grandStepWins, currentLadder);
+  renderIstSection(r.slotResults, r.overlaysMap);
   renderSlotTable(r.slotResults, currentLadder);
 
   document.getElementById('simDetails').style.display = 'block';
@@ -839,6 +877,154 @@ function paintOverlay() {
       }
     }
   }
+}
+
+// ─── IST Time Slot Performance ───
+function etTimeToMinutes(t) {
+  var m = t.match(/^(\d+)(?::(\d+))?(AM|PM)$/i);
+  if (!m) return -1;
+  var h = parseInt(m[1]), mins = parseInt(m[2] || '0'), p = m[3].toUpperCase();
+  if (p === 'AM') h = (h === 12) ? 0 : h;
+  else            h = (h === 12) ? 12 : h + 12;
+  return h * 60 + mins;
+}
+
+function getIstBand(etTimeStr) {
+  var etMin = etTimeToMinutes(etTimeStr);
+  if (etMin < 0) return -1;
+  var istMin = (etMin + 630) % 1440; // IST = ET + 10h30m
+  return Math.floor(istMin / 360);   // 0=12AM-6AM, 1=6AM-12PM, 2=12PM-6PM, 3=6PM-12AM
+}
+
+function computeIstBandStats(slotResults) {
+  var bands = [];
+  for (var b = 0; b < 4; b++) bands.push({ pnl: 0, wins: 0, losses: 0, total: 0, busts: 0 });
+  for (var i = 0; i < slotResults.length; i++) {
+    var s = slotResults[i], b = getIstBand(s.time);
+    if (b < 0 || b > 3) continue;
+    bands[b].pnl    += s.pnl;
+    bands[b].wins   += s.wins;
+    bands[b].losses += s.losses;
+    bands[b].total  += s.total;
+    bands[b].busts  += s.busts;
+  }
+  return bands;
+}
+
+function computeDailyBandPnl(overlaysMap) {
+  var bandDatePnl = [];
+  for (var b = 0; b < 4; b++) {
+    var arr = [];
+    for (var d = 0; d < DATES.length; d++) arr.push(0);
+    bandDatePnl.push(arr);
+  }
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var band = getIstBand(ROWS[ri].time);
+    if (band < 0 || band > 3) continue;
+    var ovs = overlaysMap[ROWS[ri].time];
+    if (!ovs) continue;
+    for (var di = 0; di < DATES.length; di++) {
+      var ov = ovs[di];
+      if (!ov) continue;
+      bandDatePnl[band][di] += ov.won ? ov.winProfit : -ov.bet;
+    }
+  }
+  return bandDatePnl;
+}
+
+function renderIstSection(slotResults, overlaysMap) {
+  var bands = computeIstBandStats(slotResults);
+
+  var html = '';
+  for (var b = 0; b < 4; b++) {
+    var bd = bands[b];
+    var wr    = bd.total > 0 ? (bd.wins / bd.total * 100).toFixed(2) + '%' : '0%';
+    var wrNum = bd.total > 0 ? bd.wins / bd.total * 100 : 0;
+    var pnlS  = (bd.pnl >= 0 ? '+$' : '-$') + Math.abs(bd.pnl).toFixed(2);
+    var pnlC  = bd.pnl >= 0 ? 'pos' : 'neg';
+    var wrC   = wrNum >= 50 ? 'pos' : 'neg';
+    var buC   = bd.busts > 0 ? 'neg' : 'pos';
+    html += '<div class="col-6 col-md-3">'
+          + '<div class="ist-card">'
+          + '<div class="ist-band-label">' + IST_BANDS[b].label + '</div>'
+          + '<div class="ist-pnl ' + pnlC + '">' + pnlS + '</div>'
+          + '<div class="ist-meta">'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Win Rate</span><span class="ist-meta-val ' + wrC + '">' + wr + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Trades</span><span class="ist-meta-val">' + bd.total + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">W / L</span><span class="ist-meta-val">' + bd.wins + ' / ' + bd.losses + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + bd.busts + '</span></div>'
+          + '</div></div></div>';
+  }
+  document.getElementById('istCards').innerHTML = html;
+
+  // PNL bar chart
+  if (istPnlChartInst) { istPnlChartInst.destroy(); istPnlChartInst = null; }
+  var pnls   = bands.map(function(bd) { return parseFloat(bd.pnl.toFixed(2)); });
+  var bColors = pnls.map(function(p) { return p >= 0 ? '#3fb950' : '#f85149'; });
+  istPnlChartInst = new Chart(document.getElementById('istPnlChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: IST_BANDS.map(function(b) { return b.label; }),
+      datasets: [{ label: 'PNL ($)', data: pnls, backgroundColor: bColors, borderRadius: 6, borderSkipped: false }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: function(it) { return (it.raw >= 0 ? '+$' : '-$') + Math.abs(it.raw).toFixed(2); } } }
+      },
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+        y: { grid: { color: '#21262d' },
+             ticks: { color: '#8b949e', callback: function(v) { return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2); } },
+             title: { display: true, text: 'PNL ($)', color: '#8b949e' } }
+      }
+    }
+  });
+
+  // Cumulative PNL line chart — single overall line across all dates
+  if (cumPnlChartInst) { cumPnlChartInst.destroy(); cumPnlChartInst = null; }
+  var bandDatePnl = computeDailyBandPnl(overlaysMap);
+  var cumData = [], running = 0;
+  for (var di = 0; di < DATES.length; di++) {
+    var dayTotal = 0;
+    for (var b = 0; b < 4; b++) dayTotal += bandDatePnl[b][di];
+    running += dayTotal;
+    cumData.push(parseFloat(running.toFixed(2)));
+  }
+  var lineColor = running >= 0 ? '#3fb950' : '#f85149';
+  cumPnlChartInst = new Chart(document.getElementById('cumPnlChart').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: DATES,
+      datasets: [{
+        label: 'Cumulative PNL',
+        data: cumData,
+        borderColor: lineColor,
+        backgroundColor: lineColor + '22',
+        fill: true,
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: function(it) { return (it.raw >= 0 ? '+$' : '-$') + Math.abs(it.raw).toFixed(2); } } }
+      },
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e', maxTicksLimit: 12, maxRotation: 45 } },
+        y: { grid: { color: '#21262d' },
+             ticks: { color: '#8b949e', callback: function(v) { return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2); } },
+             title: { display: true, text: 'Cumulative PNL ($)', color: '#8b949e' } }
+      }
+    }
+  });
+
+  document.getElementById('istSection').style.display    = 'block';
+  document.getElementById('cumPnlSection').style.display = 'block';
 }
 
 // ─── Helpers ───
