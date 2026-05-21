@@ -56,6 +56,11 @@
     .btn-overlay { background: #21262d; border: 1px solid #30363d; border-radius: 8px; padding: 6px 16px; font-size: .82rem; color: #c9d1d9; cursor: pointer; }
     .btn-overlay.on { background: #388bfd; border-color: #388bfd; color: #fff; }
 
+    .header-icon-title { display: flex; align-items: center; gap: 12px; }
+    .header-title-group { display: flex; flex-direction: column; justify-content: center; line-height: 1; }
+    .header-title { color: #58a6ff; letter-spacing: .06em; margin: 0; font-size: 1rem; }
+    .filename-label { color: #8b949e; font-size: .78rem; line-height: 1.2; }
+
     /* Mode toggle pills */
     .mode-toggle { display: flex; gap: 0; background: #0d1117; border: 1px solid #30363d; border-radius: 9px; overflow: hidden; }
     .mode-toggle label {
@@ -122,7 +127,7 @@
   <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div class="d-flex align-items-center gap-3 flex-wrap">
       <a href="/" class="back-btn">← Upload New</a>
-      <div class="d-flex align-items-baseline gap-2">
+      <div class="header-icon-title">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" style="flex-shrink:0">
             <rect width="32" height="32" rx="7" fill="#0d1117"/>
             <defs>
@@ -135,8 +140,10 @@
             <path d="M 16 19 A 3 3 0 1 1 19 16" fill="none" stroke="url(#rg2)" stroke-width="2" stroke-linecap="round"/>
             <circle cx="16" cy="16" r="1.5" fill="#d2a8ff"/>
           </svg>
-          <h5 class="mb-0 fw-bold" style="color:#58a6ff;letter-spacing:.06em">CRYPTO VORTAX</h5>
-        <span style="color:#8b949e;font-size:.8rem">{{ filename }}</span>
+          <div class="header-title-group">
+            <h5 class="mb-0 fw-bold header-title">CRYPTO VORTAX</h5>
+            <span class="filename-label">{{ filename }}</span>
+          </div>
       </div>
       {% if saved_files %}
       <div class="d-flex align-items-center gap-2">
@@ -264,6 +271,21 @@
             <div class="col-md-2 d-flex align-items-end">
               <button class="btn btn-run text-white w-100" onclick="runAllSims()">Run Simulation</button>
             </div>
+            <div class="col-12">
+              <label class="form-label d-block">Custom Pattern <span style="font-weight:400;text-transform:none">(Up/Down sequence)</span></label>
+              <input class="form-control" id="customPatternIn" value="Up Up Down">
+              <div class="mt-1" style="font-size:.72rem;color:#8b949e">
+                Pattern is used only by the Custom strategy. Use Up/Down separated by spaces or commas.
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="form-check" style="margin-top:.6rem">
+                <input class="form-check-input" type="checkbox" value="" id="customResetPattern" checked>
+                <label class="form-check-label" for="customResetPattern" style="color:#c9d1d9">
+                  Reset custom pattern to the first direction after a win or bust
+                </label>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -301,6 +323,7 @@
             <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Time Band</div>
             <div style="position:relative;height:200px;margin-bottom:24px"><canvas id="istPnlChart"></canvas></div>
             <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Day of Week</div>
+            <div class="row g-3 mb-4" id="dowCards"></div>
             <div style="position:relative;height:200px"><canvas id="dowPnlChart"></canvas></div>
           </div>
 
@@ -331,13 +354,14 @@ var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
 
-var STRATS      = ['all_up', 'all_down', 'same', 'opposite'];
-var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite' };
+var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'custom'];
+var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', custom: 'Custom Pattern' };
 var STRAT_DESCS  = {
   all_up:   'Always bet Up on every candle',
   all_down: 'Always bet Down on every candle',
   same:     'Follow the previous candle\'s direction (momentum)',
-  opposite: 'Fade the previous candle\'s direction (reversal)'
+  opposite: 'Fade the previous candle\'s direction (reversal)',
+  custom:   'Use a custom Up/Down pattern for each bet sequence.'
 };
 
 var allSimResults = {};
@@ -369,6 +393,19 @@ function updateModeDesc() {
   document.getElementById('modeDesc').textContent = desc[mode];
 }
 
+function parseCustomPattern() {
+  var raw = document.getElementById('customPatternIn').value || '';
+  var parts = raw.trim().split(/[\s,]+/).map(function(p) { return p.trim().toLowerCase(); }).filter(Boolean);
+  var pattern = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (p === 'up' || p === 'u') pattern.push('Up');
+    else if (p === 'down' || p === 'd') pattern.push('Down');
+    else return null;
+  }
+  return pattern.length ? pattern : null;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // DAY-WISE MARTINGALE
 // Each time slot (row) is an independent Martingale session.
@@ -380,7 +417,7 @@ function updateModeDesc() {
 // same time slot (e.g. at 12AM Jan 3 you look at 12AM Jan 2).
 // First date of each slot is skipped (no prior reference).
 // ─────────────────────────────────────────────────────────────────
-function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
+function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, customResetPattern) {
   buyPrice = buyPrice || 0.50;
   cooldown = cooldown || 0;
   var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
@@ -399,10 +436,11 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
   }
 
   for (var ri = 0; ri < ROWS.length; ri++) {
-    var row     = ROWS[ri];
-    var step    = 0;
-    var prevRes = null;
-    var cdLeft  = 0;   // cooldown counter per slot
+    var row        = ROWS[ri];
+    var step       = 0;
+    var prevRes    = null;
+    var cdLeft     = 0;   // cooldown counter per slot
+    var patternPos = 0;
 
     for (var di = 0; di < DATES.length; di++) {
       var actual = row.cells[di];
@@ -421,7 +459,8 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
       }
 
       var betDir;
-      if      (strategy === 'all_up')   { betDir = 'Up'; }
+      if      (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
+      else if (strategy === 'all_up')   { betDir = 'Up'; }
       else if (strategy === 'all_down') { betDir = 'Down'; }
       else if (strategy === 'same')     { betDir = prevRes; }
       else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
@@ -442,8 +481,13 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
         grandStepWins[curStep]++;
         slotMap[row.time].pnl  += winProfit;
         slotMap[row.time].wins++;
-        step   = 0;
+        step = 0;
         cdLeft = cooldown;
+        if (strategy === 'custom') {
+          patternPos = customResetPattern ? 0 : patternPos + 1;
+        } else {
+          patternPos = 0;
+        }
       } else {
         grandPnl -= betAmt;
         slotMap[row.time].pnl -= betAmt;
@@ -452,8 +496,14 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
           bust = true; grandBusts++;
           slotMap[row.time].busts++;
           step = 0;
+          if (strategy === 'custom') {
+            patternPos = customResetPattern ? 0 : patternPos + 1;
+          } else {
+            patternPos = 0;
+          }
         } else {
           step++;
+          if (strategy === 'custom') patternPos++;
         }
       }
 
@@ -466,7 +516,9 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
   for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
   return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
            grandSteps: grandSteps, grandStepWins: grandStepWins,
-           slotResults: slotResults, overlaysMap: overlaysMap };
+           slotResults: slotResults, overlaysMap: overlaysMap,
+           customPattern: customPattern,
+           customResetPattern: customResetPattern };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -475,7 +527,7 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
 // order: date-by-date, hour-by-hour within each date.
 // A loss at 12AM advances the step for the 1AM bet.
 // ─────────────────────────────────────────────────────────────────
-function simulateSimple(strategy, ladder, buyPrice, cooldown) {
+function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, customResetPattern) {
   buyPrice = buyPrice || 0.50;
   cooldown = cooldown || 0;
   var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
@@ -493,9 +545,10 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown) {
     slotMap[t]     = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
   }
 
-  var step    = 0;
-  var prevRes = null;
-  var cdLeft  = 0;
+  var step       = 0;
+  var prevRes    = null;
+  var cdLeft     = 0;
+  var patternPos = 0;
 
   for (var di = 0; di < DATES.length; di++) {
     for (var ri = 0; ri < ROWS.length; ri++) {
@@ -516,7 +569,8 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown) {
       }
 
       var betDir;
-      if      (strategy === 'all_up')   { betDir = 'Up'; }
+      if      (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
+      else if (strategy === 'all_up')   { betDir = 'Up'; }
       else if (strategy === 'all_down') { betDir = 'Down'; }
       else if (strategy === 'same')     { betDir = prevRes; }
       else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
@@ -537,8 +591,13 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown) {
         grandStepWins[curStep]++;
         slotMap[row.time].pnl  += winProfit;
         slotMap[row.time].wins++;
-        step   = 0;
+        step = 0;
         cdLeft = cooldown;
+        if (strategy === 'custom') {
+          patternPos = customResetPattern ? 0 : patternPos + 1;
+        } else {
+          patternPos = 0;
+        }
       } else {
         grandPnl -= betAmt;
         slotMap[row.time].pnl -= betAmt;
@@ -547,8 +606,14 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown) {
           bust = true; grandBusts++;
           slotMap[row.time].busts++;
           step = 0;
+          if (strategy === 'custom') {
+            patternPos = customResetPattern ? 0 : patternPos + 1;
+          } else {
+            patternPos = 0;
+          }
         } else {
           step++;
+          if (strategy === 'custom') patternPos++;
         }
       }
 
@@ -561,7 +626,9 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown) {
   for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
   return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
            grandSteps: grandSteps, grandStepWins: grandStepWins,
-           slotResults: slotResults, overlaysMap: overlaysMap };
+           slotResults: slotResults, overlaysMap: overlaysMap,
+           customPattern: customPattern,
+           customResetPattern: customResetPattern };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -571,7 +638,7 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown) {
 // Man m receives candles m, m+N, m+2N, … (0-indexed).
 // Each man runs a completely independent Martingale on his subset.
 // ─────────────────────────────────────────────────────────────────
-function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
+function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPattern, customResetPattern) {
   buyPrice = buyPrice || 0.50;
   cooldown = cooldown || 0;
   var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
@@ -606,7 +673,7 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
 
   // Simulate each man independently
   for (var m = 0; m < numMen; m++) {
-    var step = 0, prevRes = null, cdLeft = 0;
+    var step       = 0, prevRes = null, cdLeft = 0, patternPos = 0;
     var events = manEvents[m];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
@@ -624,7 +691,8 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
       }
 
       var betDir;
-      if      (strategy === 'all_up')   { betDir = 'Up'; }
+      if      (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
+      else if (strategy === 'all_up')   { betDir = 'Up'; }
       else if (strategy === 'all_down') { betDir = 'Down'; }
       else if (strategy === 'same')     { betDir = prevRes; }
       else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
@@ -642,8 +710,13 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
         grandStepWins[curStep]++;
         slotMap[ev.time].pnl += winProfit;
         slotMap[ev.time].wins++;
-        step   = 0;
+        step = 0;
         cdLeft = cooldown;
+        if (strategy === 'custom') {
+          patternPos = customResetPattern ? 0 : patternPos + 1;
+        } else {
+          patternPos = 0;
+        }
       } else {
         grandPnl -= betAmt;
         slotMap[ev.time].pnl -= betAmt;
@@ -652,8 +725,14 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
           bust = true; grandBusts++;
           slotMap[ev.time].busts++;
           step = 0;
+          if (strategy === 'custom') {
+            patternPos = customResetPattern ? 0 : patternPos + 1;
+          } else {
+            patternPos = 0;
+          }
         } else {
           step++;
+          if (strategy === 'custom') patternPos++;
         }
       }
       overlaysMap[ev.time][ev.di] = { won: won, bust: bust, bet: betAmt, winProfit: winProfit, man: m + 1 };
@@ -665,7 +744,9 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
   for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
   return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
            grandSteps: grandSteps, grandStepWins: grandStepWins,
-           slotResults: slotResults, overlaysMap: overlaysMap, numMen: numMen };
+           slotResults: slotResults, overlaysMap: overlaysMap, numMen: numMen,
+           customPattern: customPattern,
+           customResetPattern: customResetPattern };
 }
 
 var currentBuyingPrice = 0.50;
@@ -684,15 +765,22 @@ function runAllSims() {
   if (isNaN(cooldown) || cooldown < 0) cooldown = 0;
 
   var mode = document.querySelector('input[name="simMode"]:checked').value;
+  var customPattern = parseCustomPattern();
+  if (!customPattern) {
+    alert('Custom Pattern must contain Up/Down values separated by spaces or commas.');
+    return;
+  }
+  var customReset = document.getElementById('customResetPattern').checked;
+
   var engine;
   if (mode === 'menbased') {
     var numMen = parseInt(document.getElementById('menCount').value, 10);
     if (isNaN(numMen) || numMen < 2) { alert('Men-Based requires at least 2 men.'); return; }
-    engine = function(s, l) { return simulateMenBased(s, l, numMen, bp, cooldown); };
+    engine = function(s, l) { return simulateMenBased(s, l, numMen, bp, cooldown, customPattern, customReset); };
   } else if (mode === 'daywise') {
-    engine = function(s, l) { return simulateDaywise(s, l, bp, cooldown); };
+    engine = function(s, l) { return simulateDaywise(s, l, bp, cooldown, customPattern, customReset); };
   } else {
-    engine = function(s, l) { return simulateSimple(s, l, bp, cooldown); };
+    engine = function(s, l) { return simulateSimple(s, l, bp, cooldown, customPattern, customReset); };
   }
 
   allSimResults = {};
@@ -744,7 +832,8 @@ function showAnalytics(strat) {
   var r = allSimResults[strat];
   document.getElementById('detailBadge').textContent = STRAT_LABELS[strat];
   var descSuffix = r.numMen ? ' · ' + r.numMen + ' men' : '';
-  document.getElementById('detailDesc').textContent  = STRAT_DESCS[strat] + descSuffix;
+  var patternSuffix = strat === 'custom' && r.customPattern ? ' Pattern: ' + r.customPattern.join(' ') : '';
+  document.getElementById('detailDesc').textContent  = STRAT_DESCS[strat] + patternSuffix + descSuffix;
 
   renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder);
   renderBars(r.grandSteps, r.grandStepWins, currentLadder);
@@ -1105,9 +1194,55 @@ function computeDowPnl(overlaysMap) {
   return dayPnl;
 }
 
+function computeDowStats(overlaysMap) {
+  var dayStats = [];
+  for (var d = 0; d < 7; d++) dayStats.push({ pnl: 0, wins: 0, losses: 0, total: 0, busts: 0 });
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var ovs = overlaysMap[ROWS[ri].time];
+    if (!ovs) continue;
+    for (var di = 0; di < DATES_ISO.length; di++) {
+      var ov = ovs[di];
+      if (!ov || ov.skipped) continue;
+      var dow = new Date(DATES_ISO[di] + 'T00:00:00').getDay();
+      dayStats[dow].pnl    += ov.won ? ov.winProfit : -ov.bet;
+      dayStats[dow].total++;
+      if (ov.won) dayStats[dow].wins++;
+      else        dayStats[dow].losses++;
+      if (ov.bust) dayStats[dow].busts++;
+    }
+  }
+  return dayStats;
+}
+
 function renderDowPnlChart(overlaysMap) {
-  if (dowPnlChartInst) { dowPnlChartInst.destroy(); dowPnlChartInst = null; }
   var dayLabels = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var dayStats  = computeDowStats(overlaysMap);
+
+  // Render day-of-week cards
+  var html = '';
+  for (var d = 0; d < 7; d++) {
+    var ds    = dayStats[d];
+    var wr    = ds.total > 0 ? (ds.wins / ds.total * 100).toFixed(2) + '%' : '0%';
+    var wrNum = ds.total > 0 ? ds.wins / ds.total * 100 : 0;
+    var pnlS  = (ds.pnl >= 0 ? '+$' : '-$') + Math.abs(ds.pnl).toFixed(2);
+    var pnlC  = ds.pnl >= 0 ? 'pos' : 'neg';
+    var wrC   = wrNum >= 50 ? 'pos' : 'neg';
+    var buC   = ds.busts > 0 ? 'neg' : 'pos';
+    html += '<div class="col-6 col-md-3 col-lg-2" style="min-width:140px">'
+          + '<div class="ist-card">'
+          + '<div class="ist-band-label">' + dayLabels[d] + '</div>'
+          + '<div class="ist-pnl ' + pnlC + '">' + pnlS + '</div>'
+          + '<div class="ist-meta">'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Win Rate</span><span class="ist-meta-val ' + wrC + '">' + wr + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Trades</span><span class="ist-meta-val">' + ds.total + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">W / L</span><span class="ist-meta-val">' + ds.wins + ' / ' + ds.losses + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + ds.busts + '</span></div>'
+          + '</div></div></div>';
+  }
+  document.getElementById('dowCards').innerHTML = html;
+
+  // Render chart
+  if (dowPnlChartInst) { dowPnlChartInst.destroy(); dowPnlChartInst = null; }
   var dayPnl    = computeDowPnl(overlaysMap);
   var colors    = dayPnl.map(function(p) { return p >= 0 ? '#3fb950' : '#f85149'; });
   var rounded   = dayPnl.map(function(p) { return parseFloat(p.toFixed(2)); });
