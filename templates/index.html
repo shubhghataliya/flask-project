@@ -11,7 +11,7 @@
     .drop-zone {
       border: 2px dashed #30363d;
       border-radius: 10px;
-      padding: 60px 40px;
+      padding: 40px 30px;
       text-align: center;
       cursor: pointer;
       transition: all .2s;
@@ -20,32 +20,101 @@
       border-color: #58a6ff;
       background: rgba(88,166,255,.06);
     }
-    .drop-icon { font-size: 3rem; margin-bottom: 12px; }
+    .drop-icon { font-size: 2.4rem; margin-bottom: 10px; }
     .btn-upload { background: #238636; border: none; padding: 10px 28px; border-radius: 8px; font-weight: 600; }
     .btn-upload:hover { background: #2ea043; }
     .divider { display: flex; align-items: center; gap: 12px; color: #484f58; font-size: .8rem; margin: 20px 0; }
     .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #30363d; }
-    .form-select {
+    .form-select, .form-control {
       background: #0d1117 !important; border: 1px solid #30363d; color: #e6edf3 !important;
       border-radius: 8px; font-size: .9rem;
     }
-    .form-select:focus { border-color: #58a6ff !important; box-shadow: none !important; }
+    .form-select:focus, .form-control:focus { border-color: #58a6ff !important; box-shadow: none !important; }
     .form-select option { background: #161b22; color: #e6edf3; }
     .btn-load { background: #1f6feb; border: none; padding: 10px 28px; border-radius: 8px; font-weight: 600; }
     .btn-load:hover { background: #388bfd; }
+    .btn-fetch { background: #6e40c9; border: none; padding: 10px 0; border-radius: 8px; font-weight: 600; width: 100%; }
+    .btn-fetch:hover { background: #8957e5; }
+    .fetch-panel { background: #0d1117; border: 1px solid #30363d; border-radius: 10px; padding: 20px; }
+    .flabel { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; margin-bottom: 5px; }
+    /* Loading overlay */
+    #loadingOverlay {
+      display: none; position: fixed; inset: 0; background: rgba(13,17,23,.92);
+      z-index: 9999; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    }
+    #loadingOverlay.show { display: flex; }
+    .spinner { width: 48px; height: 48px; border: 4px solid #30363d; border-top-color: #8957e5; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-box { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px 32px; min-width: 320px; text-align: center; }
+    .progress-title { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8b949e; margin-bottom: 14px; }
+    .progress-counts { font-size: 2rem; font-weight: 800; color: #e6edf3; line-height: 1; margin-bottom: 4px; }
+    .progress-label { font-size: .8rem; color: #8b949e; margin-bottom: 16px; }
+    .progress-bar-wrap { background: #0d1117; border-radius: 99px; height: 8px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #6e40c9, #8957e5); transition: width .4s ease; width: 0%; }
+    .progress-status { font-size: .72rem; color: #484f58; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <div class="container" style="max-width:520px">
+  <!-- Loading overlay -->
+  <div id="loadingOverlay">
+    <div class="spinner"></div>
+    <div class="progress-box">
+      <div class="progress-title" id="progressTitle">Fetching markets…</div>
+      <div class="progress-counts"><span id="progressFetched">0</span> / <span id="progressTotal">—</span></div>
+      <div class="progress-label">markets fetched</div>
+      <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressFill"></div></div>
+      <div class="progress-status" id="progressStatus">Connecting to Polymarket API…</div>
+    </div>
+  </div>
+
+  <div class="container" style="max-width:560px">
     <div class="card p-4">
       <h4 class="mb-1 fw-bold text-center" style="color:#58a6ff; letter-spacing:.04em">CRYPTO PIVOT</h4>
-      <p class="text-secondary text-center mb-4" style="font-size:.9rem">Upload your resolved markets CSV to view the pivot</p>
+      <p class="text-secondary text-center mb-4" style="font-size:.9rem">Fetch live data or upload a CSV to view the pivot</p>
 
       {% if error %}
       <div class="alert alert-danger py-2 mb-3" role="alert">{{ error }}</div>
       {% endif %}
 
-      <form method="post" action="/upload" enctype="multipart/form-data" id="uploadForm">
+      <!-- ── LIVE FETCH ── -->
+      <div class="fetch-panel mb-3">
+        <div class="mb-3" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+          Fetch Live Data
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-4">
+              <div class="flabel">Coin</div>
+              <select class="form-select" id="fCrypto">
+                <option value="btc">BTC – Bitcoin</option>
+                <option value="eth">ETH – Ethereum</option>
+                <option value="sol">SOL – Solana</option>
+                <option value="xrp">XRP – Ripple</option>
+                <option value="bnb">BNB</option>
+                <option value="doge">DOGE</option>
+                <option value="hype">HYPE – Hyperliquid</option>
+              </select>
+            </div>
+            <div class="col-4">
+              <div class="flabel">Interval</div>
+              <select class="form-select" id="fInterval">
+                <option value="5m">5 min</option>
+                <option value="15m" selected>15 min</option>
+                <option value="1h">1 hour</option>
+                <option value="4h">4 hours</option>
+              </select>
+            </div>
+            <div class="col-4">
+              <div class="flabel">Markets</div>
+              <input class="form-control" type="number" id="fCount" value="200" min="10" max="5000" step="10">
+            </div>
+          </div>
+          <button type="button" class="btn btn-fetch text-white" onclick="startFetch()">Fetch &amp; View Pivot →</button>
+      </div>
+
+      <div class="divider">or upload a CSV file</div>
+
+      <!-- ── UPLOAD ── -->
+      <form method="post" action="/upload" enctype="multipart/form-data" id="uploadForm" onsubmit="showLoading(this, 'Loading CSV…')">
         <div class="drop-zone" id="dropZone">
           <div class="drop-icon">📂</div>
           <div class="fw-semibold mb-1">Drag &amp; drop your CSV here</div>
@@ -76,9 +145,82 @@
   </div>
 
   <script>
+    // ── Live fetch with progress polling ────────────────────────────────────
+    function startFetch() {
+      var crypto   = document.getElementById('fCrypto').value;
+      var interval = document.getElementById('fInterval').value;
+      var count    = parseInt(document.getElementById('fCount').value) || 200;
+      var coinLabel = document.getElementById('fCrypto').options[document.getElementById('fCrypto').selectedIndex].text.split('–')[0].trim();
+
+      // Show overlay
+      document.getElementById('progressTitle').textContent = 'Fetching ' + coinLabel + ' ' + interval.toUpperCase() + ' markets';
+      document.getElementById('progressFetched').textContent = '0';
+      document.getElementById('progressTotal').textContent = count;
+      document.getElementById('progressFill').style.width = '0%';
+      document.getElementById('progressStatus').textContent = 'Connecting to Polymarket API…';
+      document.getElementById('loadingOverlay').classList.add('show');
+
+      // POST to start background job
+      var fd = new FormData();
+      fd.append('crypto', crypto);
+      fd.append('interval', interval);
+      fd.append('count', count);
+
+      fetch('/fetch', { method: 'POST', body: fd })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.error) { hideOverlay(data.error); return; }
+          pollJob(data.job_id, count);
+        })
+        .catch(function(e) { hideOverlay('Network error: ' + e); });
+    }
+
+    function pollJob(jobId, total) {
+      var interval = setInterval(function() {
+        fetch('/fetch-status/' + jobId)
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.error && data.error !== null && data.status === undefined) {
+              clearInterval(interval);
+              hideOverlay('Error: ' + data.error);
+              return;
+            }
+
+            var fetched = data.fetched || 0;
+            var pct = total > 0 ? Math.min(fetched / total * 100, 100) : 0;
+            document.getElementById('progressFetched').textContent = fetched;
+            document.getElementById('progressFill').style.width = pct.toFixed(1) + '%';
+
+            var remaining = Math.max(total - fetched, 0);
+            if (data.status === 'running') {
+              document.getElementById('progressStatus').textContent =
+                remaining + ' markets remaining…';
+            }
+
+            if (data.status === 'done') {
+              clearInterval(interval);
+              document.getElementById('progressFetched').textContent = fetched;
+              document.getElementById('progressFill').style.width = '100%';
+              document.getElementById('progressStatus').textContent = 'Building pivot table…';
+              window.location.href = '/fetch-result/' + jobId;
+            } else if (data.status === 'error') {
+              clearInterval(interval);
+              hideOverlay('Error: ' + (data.error || 'Unknown error'));
+            }
+          })
+          .catch(function() { /* silently retry */ });
+      }, 500);
+    }
+
+    function hideOverlay(errorMsg) {
+      document.getElementById('loadingOverlay').classList.remove('show');
+      if (errorMsg) alert(errorMsg);
+    }
+
+    // ── CSV upload loading ───────────────────────────────────────────────────
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
-    const fileName = document.getElementById('fileName');
+    const fileName  = document.getElementById('fileName');
     const submitBtn = document.getElementById('submitBtn');
 
     function setFile(file) {
@@ -101,6 +243,15 @@
         fileInput.files = dt.files;
         setFile(file);
       }
+    });
+
+    document.getElementById('uploadForm').addEventListener('submit', function() {
+      document.getElementById('progressTitle').textContent  = 'Loading CSV file…';
+      document.getElementById('progressFetched').textContent = '—';
+      document.getElementById('progressTotal').textContent   = '—';
+      document.getElementById('progressFill').style.width    = '60%';
+      document.getElementById('progressStatus').textContent  = 'Parsing and building pivot…';
+      document.getElementById('loadingOverlay').classList.add('show');
     });
 
     function loadSaved() {
