@@ -238,8 +238,17 @@
               </div>
             </div>
 
+            <!-- Cooldown -->
+            <div class="col-md-2">
+              <label class="form-label d-block">Cooldown <span style="font-weight:400;text-transform:none">(bets to skip after win)</span></label>
+              <input class="form-control" type="number" id="cooldownIn" value="0" min="0" max="20" step="1" style="width:100px">
+              <div class="mt-1" style="font-size:.72rem;color:#8b949e">
+                0 = no cooldown &bull; 1 = skip 1 bet after win
+              </div>
+            </div>
+
             <!-- Run button -->
-            <div class="col-md-2 d-flex align-items-end">
+            <div class="col-md-1 d-flex align-items-end">
               <button class="btn btn-run text-white w-100" onclick="runAllSims()">Run Simulation</button>
             </div>
           </div>
@@ -277,7 +286,9 @@
             </div>
             <div class="row g-3 mb-4" id="istCards"></div>
             <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Time Band</div>
-            <div style="position:relative;height:200px"><canvas id="istPnlChart"></canvas></div>
+            <div style="position:relative;height:200px;margin-bottom:24px"><canvas id="istPnlChart"></canvas></div>
+            <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Day of Week</div>
+            <div style="position:relative;height:200px"><canvas id="dowPnlChart"></canvas></div>
           </div>
 
           <!-- Cumulative PNL -->
@@ -303,8 +314,9 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
-var DATES = {{ dates | tojson }};
-var ROWS  = {{ rows  | tojson }};
+var DATES     = {{ dates     | tojson }};
+var DATES_ISO = {{ dates_iso | tojson }};
+var ROWS      = {{ rows      | tojson }};
 
 var STRATS      = ['all_up', 'all_down', 'same', 'opposite'];
 var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite' };
@@ -320,6 +332,7 @@ var selectedStrat = null;
 var overlayOn     = false;
 var stepChartInst = null;
 var istPnlChartInst  = null;
+var dowPnlChartInst  = null;
 var cumPnlChartInst  = null;
 var currentLadder = [];
 
@@ -354,8 +367,9 @@ function updateModeDesc() {
 // same time slot (e.g. at 12AM Jan 3 you look at 12AM Jan 2).
 // First date of each slot is skipped (no prior reference).
 // ─────────────────────────────────────────────────────────────────
-function simulateDaywise(strategy, ladder, buyPrice) {
+function simulateDaywise(strategy, ladder, buyPrice, cooldown) {
   buyPrice = buyPrice || 0.50;
+  cooldown = cooldown || 0;
   var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
   var grandSteps = [], grandStepWins = [];
   for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
@@ -373,18 +387,24 @@ function simulateDaywise(strategy, ladder, buyPrice) {
 
   for (var ri = 0; ri < ROWS.length; ri++) {
     var row     = ROWS[ri];
-    var step    = 0;      // step resets for each time slot
-    var prevRes = null;   // prevRes resets for each time slot
+    var step    = 0;
+    var prevRes = null;
+    var cdLeft  = 0;   // cooldown counter per slot
 
     for (var di = 0; di < DATES.length; di++) {
       var actual = row.cells[di];
-
-      // Skip missing / non-Up-Down cells without touching step or prevRes
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
 
-      // same/opposite: skip first date of this slot (no prior day reference)
       if (strategy === 'same' || strategy === 'opposite') {
         if (!prevRes) { prevRes = actual; continue; }
+      }
+
+      // Cooldown: skip bet, update prevRes, decrement counter
+      if (cdLeft > 0) {
+        overlaysMap[row.time][di] = { skipped: true };
+        prevRes = actual;
+        cdLeft--;
+        continue;
       }
 
       var betDir;
@@ -409,7 +429,8 @@ function simulateDaywise(strategy, ladder, buyPrice) {
         grandStepWins[curStep]++;
         slotMap[row.time].pnl  += winProfit;
         slotMap[row.time].wins++;
-        step = 0;
+        step   = 0;
+        cdLeft = cooldown;
       } else {
         grandPnl -= betAmt;
         slotMap[row.time].pnl -= betAmt;
@@ -441,8 +462,9 @@ function simulateDaywise(strategy, ladder, buyPrice) {
 // order: date-by-date, hour-by-hour within each date.
 // A loss at 12AM advances the step for the 1AM bet.
 // ─────────────────────────────────────────────────────────────────
-function simulateSimple(strategy, ladder, buyPrice) {
+function simulateSimple(strategy, ladder, buyPrice, cooldown) {
   buyPrice = buyPrice || 0.50;
+  cooldown = cooldown || 0;
   var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
   var grandSteps = [], grandStepWins = [];
   for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
@@ -460,8 +482,8 @@ function simulateSimple(strategy, ladder, buyPrice) {
 
   var step    = 0;
   var prevRes = null;
+  var cdLeft  = 0;
 
-  // Outer = date, inner = time slot → true chronological order
   for (var di = 0; di < DATES.length; di++) {
     for (var ri = 0; ri < ROWS.length; ri++) {
       var row    = ROWS[ri];
@@ -471,6 +493,13 @@ function simulateSimple(strategy, ladder, buyPrice) {
 
       if (strategy === 'same' || strategy === 'opposite') {
         if (!prevRes) { prevRes = actual; continue; }
+      }
+
+      if (cdLeft > 0) {
+        overlaysMap[row.time][di] = { skipped: true };
+        prevRes = actual;
+        cdLeft--;
+        continue;
       }
 
       var betDir;
@@ -495,7 +524,8 @@ function simulateSimple(strategy, ladder, buyPrice) {
         grandStepWins[curStep]++;
         slotMap[row.time].pnl  += winProfit;
         slotMap[row.time].wins++;
-        step = 0;
+        step   = 0;
+        cdLeft = cooldown;
       } else {
         grandPnl -= betAmt;
         slotMap[row.time].pnl -= betAmt;
@@ -528,8 +558,9 @@ function simulateSimple(strategy, ladder, buyPrice) {
 // Man m receives candles m, m+N, m+2N, … (0-indexed).
 // Each man runs a completely independent Martingale on his subset.
 // ─────────────────────────────────────────────────────────────────
-function simulateMenBased(strategy, ladder, numMen, buyPrice) {
+function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown) {
   buyPrice = buyPrice || 0.50;
+  cooldown = cooldown || 0;
   var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
   var grandSteps = [], grandStepWins = [];
   for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
@@ -562,7 +593,7 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice) {
 
   // Simulate each man independently
   for (var m = 0; m < numMen; m++) {
-    var step = 0, prevRes = null;
+    var step = 0, prevRes = null, cdLeft = 0;
     var events = manEvents[m];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
@@ -570,6 +601,13 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice) {
 
       if (strategy === 'same' || strategy === 'opposite') {
         if (!prevRes) { prevRes = actual; continue; }
+      }
+
+      if (cdLeft > 0) {
+        overlaysMap[ev.time][ev.di] = { skipped: true, man: m + 1 };
+        prevRes = actual;
+        cdLeft--;
+        continue;
       }
 
       var betDir;
@@ -591,7 +629,8 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice) {
         grandStepWins[curStep]++;
         slotMap[ev.time].pnl += winProfit;
         slotMap[ev.time].wins++;
-        step = 0;
+        step   = 0;
+        cdLeft = cooldown;
       } else {
         grandPnl -= betAmt;
         slotMap[ev.time].pnl -= betAmt;
@@ -628,16 +667,19 @@ function runAllSims() {
   if (isNaN(bp) || bp <= 0 || bp >= 1) { alert('Buying price must be between 0.01 and 0.99'); return; }
   currentBuyingPrice = bp;
 
+  var cooldown = parseInt(document.getElementById('cooldownIn').value, 10);
+  if (isNaN(cooldown) || cooldown < 0) cooldown = 0;
+
   var mode = document.querySelector('input[name="simMode"]:checked').value;
   var engine;
   if (mode === 'menbased') {
     var numMen = parseInt(document.getElementById('menCount').value, 10);
     if (isNaN(numMen) || numMen < 2) { alert('Men-Based requires at least 2 men.'); return; }
-    engine = function(s, l) { return simulateMenBased(s, l, numMen, bp); };
+    engine = function(s, l) { return simulateMenBased(s, l, numMen, bp, cooldown); };
   } else if (mode === 'daywise') {
-    engine = function(s, l) { return simulateDaywise(s, l, bp); };
+    engine = function(s, l) { return simulateDaywise(s, l, bp, cooldown); };
   } else {
-    engine = function(s, l) { return simulateSimple(s, l, bp); };
+    engine = function(s, l) { return simulateSimple(s, l, bp, cooldown); };
   }
 
   allSimResults = {};
@@ -861,8 +903,13 @@ function paintOverlay() {
       else                     td.className = 'c-empty';
 
       if (!ov) {
-        // No bet (skipped first date for same/opposite, or empty cell)
         td.textContent = (res === 'Up') ? '▲ Up' : (res === 'Down') ? '▼ Down' : '—';
+        continue;
+      }
+
+      if (ov.skipped) {
+        var mSkip = ov.man ? ' M' + ov.man : '';
+        td.innerHTML = '<span style="color:#8b949e;font-size:.72rem;font-weight:600">CD' + mSkip + '</span>';
         continue;
       }
 
@@ -1023,8 +1070,55 @@ function renderIstSection(slotResults, overlaysMap) {
     }
   });
 
+  // PNL by day of week
+  renderDowPnlChart(overlaysMap);
+
   document.getElementById('istSection').style.display    = 'block';
   document.getElementById('cumPnlSection').style.display = 'block';
+}
+
+function computeDowPnl(overlaysMap) {
+  var dayPnl = [0, 0, 0, 0, 0, 0, 0]; // Sun=0 … Sat=6
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var ovs = overlaysMap[ROWS[ri].time];
+    if (!ovs) continue;
+    for (var di = 0; di < DATES_ISO.length; di++) {
+      var ov = ovs[di];
+      if (!ov || ov.skipped) continue;
+      var dow = new Date(DATES_ISO[di] + 'T00:00:00').getDay();
+      dayPnl[dow] += ov.won ? ov.winProfit : -ov.bet;
+    }
+  }
+  return dayPnl;
+}
+
+function renderDowPnlChart(overlaysMap) {
+  if (dowPnlChartInst) { dowPnlChartInst.destroy(); dowPnlChartInst = null; }
+  var dayLabels = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var dayPnl    = computeDowPnl(overlaysMap);
+  var colors    = dayPnl.map(function(p) { return p >= 0 ? '#3fb950' : '#f85149'; });
+  var rounded   = dayPnl.map(function(p) { return parseFloat(p.toFixed(2)); });
+
+  dowPnlChartInst = new Chart(document.getElementById('dowPnlChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: dayLabels,
+      datasets: [{ label: 'PNL ($)', data: rounded, backgroundColor: colors, borderRadius: 6, borderSkipped: false }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: function(it) { return (it.raw >= 0 ? '+$' : '-$') + Math.abs(it.raw).toFixed(2); } } }
+      },
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+        y: { grid: { color: '#21262d' },
+             ticks: { color: '#8b949e', callback: function(v) { return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2); } },
+             title: { display: true, text: 'PNL ($)', color: '#8b949e' } }
+      }
+    }
+  });
 }
 
 // ─── Helpers ───

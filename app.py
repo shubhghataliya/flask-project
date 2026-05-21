@@ -54,6 +54,8 @@ def time_to_minutes(t):
 
 def detect_timeframe(df):
     slugs = df['Slug'].dropna().astype(str)
+    if slugs.str.contains(r'-5m-', case=False, regex=True).any():
+        return '5m'
     if slugs.str.contains(r'-15m-', case=False, regex=True).any():
         return '15m'
     if slugs.str.contains(r'-4h-', case=False, regex=True).any():
@@ -67,7 +69,7 @@ def process_csv(content):
     df = df.dropna(subset=['_edt', 'Resolution Result'])
 
     timeframe = detect_timeframe(df)
-    if timeframe == '15m':
+    if timeframe in ('5m', '15m'):
         parse_question = parse_question_15m
     elif timeframe == '4h':
         parse_question = parse_question_4h
@@ -107,6 +109,7 @@ def process_csv(content):
     date_labels = [f"{d.strftime('%b')} {d.day}" for d in date_order]
     seen = set()
     unique_dates = [x for x in date_labels if not (x in seen or seen.add(x))]
+    dates_iso = [d.strftime('%Y-%m-%d') for d in date_order]
 
     time_df = rdf[['time', 'time_minutes']].drop_duplicates().sort_values('time_minutes')
     unique_times = list(time_df['time'])
@@ -119,17 +122,18 @@ def process_csv(content):
         if any(c for c in cells):
             rows.append({'time': ts, 'cells': cells})
 
-    return rows, unique_dates, timeframe
+    return rows, unique_dates, dates_iso, timeframe
 
 def get_saved_files():
     return sorted(f for f in os.listdir(UPLOAD_FOLDER) if f.lower().endswith('.csv'))
 
-def render_result(rows, dates, timeframe, filename):
+def render_result(rows, dates, dates_iso, timeframe, filename):
     up = sum(1 for r in rows for c in r['cells'] if c == 'Up')
     down = sum(1 for r in rows for c in r['cells'] if c == 'Down')
     total = up + down
     return render_template('result.html',
                            dates=dates,
+                           dates_iso=dates_iso,
                            rows=rows,
                            up_count=up,
                            down_count=down,
@@ -155,8 +159,8 @@ def upload():
         safe_name = secure_filename(file.filename)
         with open(os.path.join(UPLOAD_FOLDER, safe_name), 'w', encoding='utf-8') as f:
             f.write(content)
-        rows, dates, timeframe = process_csv(content)
-        return render_result(rows, dates, timeframe, safe_name)
+        rows, dates, dates_iso, timeframe = process_csv(content)
+        return render_result(rows, dates, dates_iso, timeframe, safe_name)
     except Exception as e:
         return render_template('index.html', error=str(e), saved_files=get_saved_files())
 
@@ -169,8 +173,8 @@ def load_file(filename):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
-        rows, dates, timeframe = process_csv(content)
-        return render_result(rows, dates, timeframe, safe_name)
+        rows, dates, dates_iso, timeframe = process_csv(content)
+        return render_result(rows, dates, dates_iso, timeframe, safe_name)
     except Exception as e:
         return render_template('index.html', error=str(e), saved_files=get_saved_files())
 
