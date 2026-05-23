@@ -118,9 +118,36 @@
     .ist-meta-item { display: flex; flex-direction: column; }
     .ist-meta-val { font-size: .88rem; font-weight: 700; color: #e6edf3; }
     .ist-meta-lbl { font-size: .65rem; color: #8b949e; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 1px; }
+    
+    /* Live fetch panel styling */
+    .live-fetch-panel { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .live-fetch-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; margin-bottom: 12px; }
+    .flabel { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; margin-bottom: 5px; }
+    .form-select, .form-control {
+      background: #0d1117 !important; border: 1px solid #30363d; color: #e6edf3 !important;
+      border-radius: 8px; font-size: .9rem;
+    }
+    .form-select:focus, .form-control:focus { border-color: #58a6ff !important; box-shadow: none !important; }
+    .form-select option { background: #161b22; color: #e6edf3; }
+    .btn-fetch-live { background: #6e40c9; border: none; padding: 10px 28px; border-radius: 8px; font-weight: 600; width: 100%; margin-top: 12px; }
+    .btn-fetch-live:hover { background: #8957e5; }
+    .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #30363d; border-top-color: #8957e5; border-radius: 50%; animation: spin .8s linear infinite; margin-right: 8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
+<!-- Loading overlay -->
+<div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(13,17,23,.92);z-index:9999;flex-direction:column;align-items:center;justify-content:center;gap:20px">
+  <div style="width:48px;height:48px;border:4px solid #30363d;border-top-color:#8957e5;border-radius:50%;animation:spin .8s linear infinite"></div>
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:24px 32px;min-width:320px;text-align:center">
+    <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#8b949e;margin-bottom:14px" id="progressTitle">Fetching data…</div>
+    <div style="font-size:2rem;font-weight:800;color:#e6edf3;line-height:1;margin-bottom:4px"><span id="progressFetched">0</span> / <span id="progressTotal">—</span></div>
+    <div style="font-size:.8rem;color:#8b949e;margin-bottom:16px">markets fetched</div>
+    <div style="background:#0d1117;border-radius:99px;height:8px;overflow:hidden"><div id="progressFill" style="height:100%;border-radius:99px;background:linear-gradient(90deg,#6e40c9,#8957e5);transition:width .4s ease;width:0%"></div></div>
+    <div style="font-size:.72rem;color:#484f58;margin-top:10px" id="progressStatus">Connecting…</div>
+  </div>
+</div>
+
 <div class="container-fluid py-3 px-4">
 
   <!-- Top bar -->
@@ -166,6 +193,41 @@
       <span class="badge rounded-pill px-3 py-2 badge-up">▲ Up: {{ up_count }} ({{ up_pct }}%)</span>
       <span class="badge rounded-pill px-3 py-2 badge-down">▼ Down: {{ down_count }} ({{ 100 - up_pct }}%)</span>
       <span class="badge rounded-pill px-3 py-2 badge-tot">Total: {{ total }}</span>
+    </div>
+  </div>
+
+  <!-- Live Fetch Panel -->
+  <div class="live-fetch-panel">
+    <div class="live-fetch-label">Fetch Live Market Data</div>
+    <div class="row g-2 mb-3">
+      <div class="col-md-3 col-sm-6">
+        <div class="flabel">Coin</div>
+        <select class="form-select" id="liveCrypto">
+          <option value="btc">BTC – Bitcoin</option>
+          <option value="eth">ETH – Ethereum</option>
+          <option value="sol">SOL – Solana</option>
+          <option value="xrp">XRP – Ripple</option>
+          <option value="bnb">BNB</option>
+          <option value="doge">DOGE</option>
+          <option value="hype">HYPE – Hyperliquid</option>
+        </select>
+      </div>
+      <div class="col-md-3 col-sm-6">
+        <div class="flabel">Interval</div>
+        <select class="form-select" id="liveInterval">
+          <option value="5m">5 min</option>
+          <option value="15m" selected>15 min</option>
+          <option value="1h">1 hour</option>
+          <option value="4h">4 hours</option>
+        </select>
+      </div>
+      <div class="col-md-3 col-sm-6">
+        <div class="flabel">Markets</div>
+        <input class="form-control" type="number" id="liveCount" value="200" min="10" max="5000" step="10">
+      </div>
+      <div class="col-md-3 col-sm-6 d-flex align-items-end">
+        <button type="button" class="btn btn-fetch-live text-white" onclick="startLiveFetch()">Fetch &amp; Update →</button>
+      </div>
     </div>
   </div>
 
@@ -1284,6 +1346,71 @@ function confirmDelete() {
   if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
   var form = document.getElementById('deleteForm');
   form.action = '/delete/' + encodeURIComponent(name); form.submit();
+}
+
+// ─── Live fetch from dashboard ─────────────────────────────────────────────
+function startLiveFetch() {
+  var crypto   = document.getElementById('liveCrypto').value;
+  var interval = document.getElementById('liveInterval').value;
+  var count    = parseInt(document.getElementById('liveCount').value) || 200;
+  var coinLabel = document.getElementById('liveCrypto').options[document.getElementById('liveCrypto').selectedIndex].text.split('–')[0].trim();
+
+  // Show overlay
+  document.getElementById('progressTitle').textContent = 'Fetching ' + coinLabel + ' ' + interval.toUpperCase() + ' markets';
+  document.getElementById('progressFetched').textContent = '0';
+  document.getElementById('progressTotal').textContent = count;
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressStatus').textContent = 'Connecting to Polymarket API…';
+  document.getElementById('loadingOverlay').style.display = 'flex';
+
+  // POST to start background job
+  var fd = new FormData();
+  fd.append('crypto', crypto);
+  fd.append('interval', interval);
+  fd.append('count', count);
+
+  fetch('/fetch', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) { hideOverlay(data.error); return; }
+      pollLiveJob(data.job_id, count);
+    })
+    .catch(function(e) { hideOverlay('Network error: ' + e); });
+}
+
+function pollLiveJob(jobId, total) {
+  var interval = setInterval(function() {
+    fetch('/fetch-status/' + jobId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error && data.error !== null && data.status === undefined) {
+          clearInterval(interval);
+          hideOverlay('Error: ' + data.error);
+          return;
+        }
+        var pct = total > 0 ? Math.round((data.fetched / total) * 100) : 0;
+        document.getElementById('progressFetched').textContent = data.fetched;
+        document.getElementById('progressFill').style.width = pct + '%';
+        document.getElementById('progressStatus').textContent = pct + '% complete…';
+        if (data.status === 'done') {
+          clearInterval(interval);
+          hideOverlay();
+          window.location.href = '/fetch-result/' + jobId;
+        } else if (data.status === 'error') {
+          clearInterval(interval);
+          hideOverlay('Error: ' + (data.error || 'Unknown error'));
+        }
+      })
+      .catch(function(e) {
+        clearInterval(interval);
+        hideOverlay('Poll error: ' + e);
+      });
+  }, 300);
+}
+
+function hideOverlay(err) {
+  document.getElementById('loadingOverlay').style.display = 'none';
+  if (err) { alert(err); }
 }
 </script>
 </body>
