@@ -153,7 +153,6 @@
   <!-- Top bar -->
   <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div class="d-flex align-items-center gap-3 flex-wrap">
-      <a href="/" class="back-btn">← Upload New</a>
       <div class="header-icon-title">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" style="flex-shrink:0">
             <rect width="32" height="32" rx="7" fill="#0d1117"/>
@@ -223,7 +222,7 @@
       </div>
       <div class="col-md-3 col-sm-6">
         <div class="flabel">Markets</div>
-        <input class="form-control" type="number" id="liveCount" value="200" min="10" max="5000" step="10">
+        <input class="form-control" type="number" id="liveCount" value="2000" min="10" max="5000" step="10">
       </div>
       <div class="col-md-3 col-sm-6 d-flex align-items-end">
         <button type="button" class="btn btn-fetch-live text-white" onclick="startLiveFetch()">Fetch &amp; Update →</button>
@@ -306,7 +305,7 @@
             <!-- Ladder -->
             <div class="col-md-3">
               <label class="form-label d-block">Ladder <span style="font-weight:400;text-transform:none">(comma-separated units)</span></label>
-              <input class="form-control" id="ladderIn" value="1, 3, 9, 27">
+              <input class="form-control" id="ladderIn" value="0.01, 0.01, 0.01, 1, 2, 5, 14">
               <div class="mt-1" style="font-size:.72rem;color:#8b949e">
                 Win → reset to step 1 &bull; Lose → advance step &bull; Bust on last step → reset
               </div>
@@ -315,7 +314,7 @@
             <!-- Buying Price -->
             <div class="col-md-2">
               <label class="form-label d-block">Buying Price <span style="font-weight:400;text-transform:none">(0.01–0.99)</span></label>
-              <input class="form-control" type="number" id="buyingPrice" value="0.50" min="0.01" max="0.99" step="0.01">
+              <input class="form-control" type="number" id="buyingPrice" value="0.51" min="0.01" max="0.99" step="0.01">
               <div class="mt-1" style="font-size:.72rem;color:#8b949e">
                 Win profit = units &times; (1&minus;price)/price
               </div>
@@ -518,6 +517,101 @@ function parseCustomPattern() {
   }
   return pattern.length ? pattern : null;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// DRAWDOWN EPISODES — every peak→trough→recovery cycle is one episode.
+// We walk the running PnL chronologically: when it drops below the
+// running peak we open a new episode and track its lowest trough.
+// When PnL recovers to (or past) that peak the episode closes and its
+// depth (peak - trough) is recorded. Any unfinished episode at the
+// end of the walk is also recorded. Episodes are sorted by depth desc
+// and the top two are surfaced as MD1 (deepest) and MD2 (next deepest).
+// ─────────────────────────────────────────────────────────────────
+function _top2(arr) { arr.sort(function(a, b) { return b - a; }); return [arr[0] || 0, arr[1] || 0]; }
+
+function computeChronoMDs(overlaysMap) {
+  var running = 0, peak = 0, trough = 0, inDD = false;
+  var ep = [];
+  for (var di = 0; di < DATES.length; di++) {
+    for (var ri = 0; ri < ROWS.length; ri++) {
+      var ovs = overlaysMap[ROWS[ri].time];
+      if (!ovs) continue;
+      var ov = ovs[di];
+      if (!ov || ov.skipped) continue;
+      running += ov.won ? ov.winProfit : -ov.bet;
+      if (running >= peak) {
+        if (inDD) { ep.push(peak - trough); inDD = false; }
+        peak = running;
+      } else {
+        if (!inDD) { trough = running; inDD = true; }
+        else if (running < trough) { trough = running; }
+      }
+    }
+  }
+  if (inDD) ep.push(peak - trough);
+  return _top2(ep);
+}
+
+function computeBandMDs(overlaysMap) {
+  var ep = [[],[],[],[]];
+  var running = [0,0,0,0], peak = [0,0,0,0], trough = [0,0,0,0], inDD = [false,false,false,false];
+  for (var di = 0; di < DATES.length; di++) {
+    for (var ri = 0; ri < ROWS.length; ri++) {
+      var b = getIstBand(ROWS[ri].time);
+      if (b < 0 || b > 3) continue;
+      var ovs = overlaysMap[ROWS[ri].time];
+      if (!ovs) continue;
+      var ov = ovs[di];
+      if (!ov || ov.skipped) continue;
+      running[b] += ov.won ? ov.winProfit : -ov.bet;
+      if (running[b] >= peak[b]) {
+        if (inDD[b]) { ep[b].push(peak[b] - trough[b]); inDD[b] = false; }
+        peak[b] = running[b];
+      } else {
+        if (!inDD[b]) { trough[b] = running[b]; inDD[b] = true; }
+        else if (running[b] < trough[b]) { trough[b] = running[b]; }
+      }
+    }
+  }
+  var out = [];
+  for (var b = 0; b < 4; b++) {
+    if (inDD[b]) ep[b].push(peak[b] - trough[b]);
+    out.push(_top2(ep[b]));
+  }
+  return out;
+}
+
+function computeDowMDs(overlaysMap) {
+  var ep = [[],[],[],[],[],[],[]];
+  var running = [0,0,0,0,0,0,0], peak = [0,0,0,0,0,0,0], trough = [0,0,0,0,0,0,0];
+  var inDD = [false,false,false,false,false,false,false];
+  for (var di = 0; di < DATES_ISO.length; di++) {
+    var dow = new Date(DATES_ISO[di] + 'T00:00:00').getDay();
+    for (var ri = 0; ri < ROWS.length; ri++) {
+      var ovs = overlaysMap[ROWS[ri].time];
+      if (!ovs) continue;
+      var ov = ovs[di];
+      if (!ov || ov.skipped) continue;
+      running[dow] += ov.won ? ov.winProfit : -ov.bet;
+      if (running[dow] >= peak[dow]) {
+        if (inDD[dow]) { ep[dow].push(peak[dow] - trough[dow]); inDD[dow] = false; }
+        peak[dow] = running[dow];
+      } else {
+        if (!inDD[dow]) { trough[dow] = running[dow]; inDD[dow] = true; }
+        else if (running[dow] < trough[dow]) { trough[dow] = running[dow]; }
+      }
+    }
+  }
+  var out = [];
+  for (var d = 0; d < 7; d++) {
+    if (inDD[d]) ep[d].push(peak[d] - trough[d]);
+    out.push(_top2(ep[d]));
+  }
+  return out;
+}
+
+function fmtMD(md) { return '-$' + (md || 0).toFixed(2); }
+function fmtMDs(mds) { mds = mds || [0,0]; return 'MD1 ' + fmtMD(mds[0]) + ' · MD2 ' + fmtMD(mds[1]); }
 
 // ─────────────────────────────────────────────────────────────────
 // DAY-WISE MARTINGALE
@@ -898,7 +992,11 @@ function runAllSims() {
 
   allSimResults = {};
   for (var i = 0; i < STRATS.length; i++) {
-    allSimResults[STRATS[i]] = engine(STRATS[i], ladder);
+    var r = engine(STRATS[i], ladder);
+    r.grandMDs = computeChronoMDs(r.overlaysMap);
+    r.bandMDs  = computeBandMDs(r.overlaysMap);
+    r.dowMDs   = computeDowMDs(r.overlaysMap);
+    allSimResults[STRATS[i]] = r;
   }
 
   renderStratCards();
@@ -918,6 +1016,8 @@ function renderStratCards() {
     var pnlC = r.grandPnl > 0 ? 'pos' : r.grandPnl < 0 ? 'neg' : 'neu';
     var buC  = r.grandBusts > 0 ? 'neg' : 'pos';
 
+    var md1 = (r.grandMDs && r.grandMDs[0]) || 0;
+    var md2 = (r.grandMDs && r.grandMDs[1]) || 0;
     html += '<div class="col-6 col-md">'
           + '<div class="strat-card" id="scard_' + s + '" onclick="showAnalytics(\'' + s + '\')">'
           + '<div class="strat-name">' + STRAT_LABELS[s] + '</div>'
@@ -927,6 +1027,8 @@ function renderStratCards() {
           + '<span>Win <strong>' + wr + '%</strong></span>'
           + '<span>Bets <strong>' + r.grandBets + '</strong></span>'
           + '<span class="' + buC + '">Busts <strong>' + r.grandBusts + '</strong></span>'
+          + '<span class="neg">MD1 <strong>' + fmtMD(md1) + '</strong></span>'
+          + '<span class="neg">MD2 <strong>' + fmtMD(md2) + '</strong></span>'
           + '</div>'
           + '<button class="btn-analytics">Analytics ↓</button>'
           + '</div></div>';
@@ -949,9 +1051,9 @@ function showAnalytics(strat, noScroll) {
   var patternSuffix = strat === 'custom' && r.customPattern ? ' Pattern: ' + r.customPattern.join(' ') : '';
   document.getElementById('detailDesc').textContent  = STRAT_DESCS[strat] + patternSuffix + descSuffix;
 
-  renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder);
+  renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder, r.grandMDs);
   renderBars(r.grandSteps, r.grandStepWins, currentLadder);
-  renderIstSection(r.slotResults, r.overlaysMap);
+  renderIstSection(r.slotResults, r.overlaysMap, r.bandMDs, r.dowMDs);
   renderSlotTable(r.slotResults, currentLadder);
   renderBustList(r.overlaysMap);
 
@@ -971,16 +1073,21 @@ function showAnalytics(strat, noScroll) {
 }
 
 // ─── Stat cards ───
-function renderDetailCards(pnl, busts, bets, wins, ladder) {
+function renderDetailCards(pnl, busts, bets, wins, ladder, mds) {
+  mds = mds || [0, 0];
   var wr  = bets > 0 ? (wins / bets * 100).toFixed(1) : '0.0';
   var mr  = ladder.reduce(function(a, b) { return a + b; }, 0).toFixed(2);
   var pS  = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
   var pC  = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neu';
+  var md1C = (mds[0] || 0) > 0 ? 'neg' : 'neu';
+  var md2C = (mds[1] || 0) > 0 ? 'neg' : 'neu';
   var priceLabel = 'Buy @ $' + currentBuyingPrice.toFixed(2) + ' · Max risk: $' + mr;
   document.getElementById('detailCards').innerHTML =
     dc(pS,                      'Total PnL ($)',                  pC) +
     dc(busts,                   'Total Busts',                    busts > 0 ? 'neg' : 'pos') +
     dc(wr + '%',                'Win Rate (' + wins + '/' + bets + ')', parseFloat(wr) >= 50 ? 'pos' : 'neg') +
+    dc(fmtMD(mds[0]),           'MD1 — Deepest Drawdown',         md1C) +
+    dc(fmtMD(mds[1]),           'MD2 — 2nd Deepest Drawdown',     md2C) +
     dc(ladder.length + ' steps', priceLabel,                      'neu');
 }
 function dc(v, l, c) {
@@ -1233,8 +1340,9 @@ function computeDailyBandPnl(overlaysMap) {
   return bandDatePnl;
 }
 
-function renderIstSection(slotResults, overlaysMap) {
+function renderIstSection(slotResults, overlaysMap, bandMDs, dowMDs) {
   var bands = computeIstBandStats(slotResults);
+  bandMDs = bandMDs || [[0,0],[0,0],[0,0],[0,0]];
 
   var html = '';
   for (var b = 0; b < 4; b++) {
@@ -1245,6 +1353,9 @@ function renderIstSection(slotResults, overlaysMap) {
     var pnlC  = bd.pnl >= 0 ? 'pos' : 'neg';
     var wrC   = wrNum >= 50 ? 'pos' : 'neg';
     var buC   = bd.busts > 0 ? 'neg' : 'pos';
+    var bMd   = bandMDs[b] || [0,0];
+    var md1C  = (bMd[0] || 0) > 0 ? 'neg' : 'neu';
+    var md2C  = (bMd[1] || 0) > 0 ? 'neg' : 'neu';
     html += '<div class="col-6 col-md-3">'
           + '<div class="ist-card">'
           + '<div class="ist-band-label">' + IST_BANDS[b].label + '</div>'
@@ -1254,6 +1365,8 @@ function renderIstSection(slotResults, overlaysMap) {
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Trades</span><span class="ist-meta-val">' + bd.total + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">W / L</span><span class="ist-meta-val">' + bd.wins + ' / ' + bd.losses + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + bd.busts + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD1</span><span class="ist-meta-val ' + md1C + '">' + fmtMD(bMd[0]) + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD2</span><span class="ist-meta-val ' + md2C + '">' + fmtMD(bMd[1]) + '</span></div>'
           + '</div></div></div>';
   }
   document.getElementById('istCards').innerHTML = html;
@@ -1300,7 +1413,7 @@ function renderIstSection(slotResults, overlaysMap) {
   });
 
   // PNL by day of week
-  renderDowPnlChart(overlaysMap);
+  renderDowPnlChart(overlaysMap, dowMDs);
 
   document.getElementById('istSection').style.display    = 'block';
   document.getElementById('dowSection').style.display    = 'block';
@@ -1342,9 +1455,10 @@ function computeDowStats(overlaysMap) {
   return dayStats;
 }
 
-function renderDowPnlChart(overlaysMap) {
+function renderDowPnlChart(overlaysMap, dowMDs) {
   var dayLabels = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var dayStats  = computeDowStats(overlaysMap);
+  dowMDs = dowMDs || [[0,0],[0,0],[0,0],[0,0],[0,0],[0,0],[0,0]];
 
   // Render day-of-week cards
   var html = '';
@@ -1356,6 +1470,9 @@ function renderDowPnlChart(overlaysMap) {
     var pnlC  = ds.pnl >= 0 ? 'pos' : 'neg';
     var wrC   = wrNum >= 50 ? 'pos' : 'neg';
     var buC   = ds.busts > 0 ? 'neg' : 'pos';
+    var dMd   = dowMDs[d] || [0,0];
+    var md1C  = (dMd[0] || 0) > 0 ? 'neg' : 'neu';
+    var md2C  = (dMd[1] || 0) > 0 ? 'neg' : 'neu';
     html += '<div class="col-6 col-sm-4 col-md-3 col-lg">'
           + '<div class="ist-card">'
           + '<div class="ist-band-label">' + dayLabels[d] + '</div>'
@@ -1365,6 +1482,8 @@ function renderDowPnlChart(overlaysMap) {
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Trades</span><span class="ist-meta-val">' + ds.total + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">W / L</span><span class="ist-meta-val">' + ds.wins + ' / ' + ds.losses + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + ds.busts + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD1</span><span class="ist-meta-val ' + md1C + '">' + fmtMD(dMd[0]) + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD2</span><span class="ist-meta-val ' + md2C + '">' + fmtMD(dMd[1]) + '</span></div>'
           + '</div></div></div>';
   }
   document.getElementById('dowCards').innerHTML = html;
@@ -1484,11 +1603,14 @@ function saveSnapshot() {
   };
   for (var i = 0; i < STRATS.length; i++) {
     var s = STRATS[i], r = allSimResults[s];
+    var mds = r.grandMDs || [0, 0];
     entry.results[s] = {
       pnl:   parseFloat(r.grandPnl.toFixed(2)),
       bets:  r.grandBets,
       wins:  r.grandWins,
-      busts: r.grandBusts
+      busts: r.grandBusts,
+      md1:   parseFloat((mds[0] || 0).toFixed(2)),
+      md2:   parseFloat((mds[1] || 0).toFixed(2))
     };
   }
   snapshots.push(entry);
@@ -1526,16 +1648,11 @@ function refreshCompareTab() {
   }
 
   var stratOrder = ['all_up', 'all_down', 'same', 'opposite', 'custom'];
-  var html = '<div style="overflow-x:auto"><table class="atbl" style="min-width:700px">';
-  html += '<thead><tr>'
-        + '<th style="text-align:left">Coin / File</th>'
-        + '<th style="text-align:left">Parameters</th>'
-        + '<th style="text-align:left">Date</th>';
-  for (var i = 0; i < stratOrder.length; i++) {
-    html += '<th>' + STRAT_LABELS[stratOrder[i]] + '<br><small style="font-weight:400;color:#555">PnL / Busts</small></th>';
-  }
-  html += '<th></th></tr></thead><tbody>';
 
+  // Header row: one column per snapshot. Each snapshot column holds file label,
+  // parameters and date stacked vertically so the table reads "strategy across snapshots".
+  var html = '<div style="overflow-x:auto"><table class="atbl" style="min-width:' + (260 + arr.length * 220) + 'px">';
+  html += '<thead><tr><th style="text-align:left;min-width:160px">Strategy</th>';
   for (var si = 0; si < arr.length; si++) {
     var e = arr[si];
     var modeLabel = e.mode;
@@ -1545,23 +1662,99 @@ function refreshCompareTab() {
     var params = modeLabel
                + ' &bull; Ladder: ' + (e.ladder || []).join(', ')
                + ' &bull; Price: $' + (e.buyingPrice || 0).toFixed(2);
-    if (e.cooldown) params += ' &bull; Cooldown: ' + e.cooldown;
+    if (e.cooldown) params += ' &bull; CD: ' + e.cooldown;
+    html += '<th style="min-width:200px;vertical-align:top">'
+          + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">'
+          + '<div style="text-align:left">'
+          + '<div style="color:#58a6ff;font-weight:700;font-size:.82rem;text-transform:none;letter-spacing:0">' + e.label + '</div>'
+          + '<div style="color:#8b949e;font-size:.7rem;font-weight:400;text-transform:none;letter-spacing:0;margin-top:3px;white-space:normal">' + params + '</div>'
+          + '<div style="color:#484f58;font-size:.68rem;font-weight:400;text-transform:none;letter-spacing:0;margin-top:3px">' + e.savedAt + '</div>'
+          + '</div>'
+          + '<button onclick="removeSnapshot(' + si + ')" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.85rem;line-height:1">✕</button>'
+          + '</div></th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  // Helpers to read MD with backward-compat for older snapshots.
+  function getMd1(r) { return r.md1 != null ? r.md1 : (r.maxDD || 0); }
+  function getMd2(r) { return r.md2 != null ? r.md2 : 0; }
+
+  // Rank top 3 snapshots PER STRATEGY ROW. For each strategy we compare
+  // it across every saved snapshot (coin / file) and pick the three that
+  // performed best on this strategy. Combined score = rank(PnL desc)
+  // + rank(MD1 asc) + rank(Busts asc); lowest sum wins.
+  function rankStrategyAcrossSnapshots(s) {
+    var rows = [];
+    for (var si = 0; si < arr.length; si++) {
+      var r = arr[si].results[s];
+      if (!r) continue;
+      rows.push({ si: si, pnl: r.pnl, md: getMd1(r), busts: r.busts });
+    }
+    if (!rows.length) return {};
+    var byPnl  = rows.slice().sort(function(a,b) { return b.pnl - a.pnl; });
+    var byMd   = rows.slice().sort(function(a,b) { return a.md - b.md; });
+    var byBust = rows.slice().sort(function(a,b) { return a.busts - b.busts; });
+    var score  = {};
+    for (var i = 0; i < rows.length; i++) score[rows[i].si] = 0;
+    for (var i = 0; i < byPnl.length;  i++) score[byPnl[i].si]  += i;
+    for (var i = 0; i < byMd.length;   i++) score[byMd[i].si]   += i;
+    for (var i = 0; i < byBust.length; i++) score[byBust[i].si] += i;
+    var ranked = Object.keys(score).sort(function(a,b) { return score[a] - score[b]; });
+    var topMap = {};
+    if (ranked[0] != null) topMap[ranked[0]] = 1;
+    if (ranked[1] != null) topMap[ranked[1]] = 2;
+    if (ranked[2] != null) topMap[ranked[2]] = 3;
+    return topMap;
+  }
+
+  var rankStyle = {
+    1: { bg: 'linear-gradient(135deg,#ffd700,#f0a500)', fg: '#0d1117', label: 'TOP 1', border: '#ffd700' },
+    2: { bg: 'linear-gradient(135deg,#c9d1d9,#8b949e)', fg: '#0d1117', label: 'TOP 2', border: '#c9d1d9' },
+    3: { bg: 'linear-gradient(135deg,#cd7f32,#8b4513)', fg: '#fff',    label: 'TOP 3', border: '#cd7f32' }
+  };
+
+  // One row per strategy. Per-row ranking compares the same strategy
+  // across every saved snapshot (coin / file) and tags the top 3 cells.
+  for (var i = 0; i < stratOrder.length; i++) {
+    var s = stratOrder[i];
+    var topMap = rankStrategyAcrossSnapshots(s);
     html += '<tr>'
-          + '<td style="text-align:left;color:#58a6ff;font-weight:700">' + e.label + '</td>'
-          + '<td style="text-align:left;color:#8b949e;font-size:.75rem;white-space:nowrap">' + params + '</td>'
-          + '<td style="text-align:left;color:#8b949e">' + e.savedAt + '</td>';
-    for (var i = 0; i < stratOrder.length; i++) {
-      var sr = e.results[stratOrder[i]];
+          + '<td style="text-align:left;font-weight:700;color:#e6edf3">' + STRAT_LABELS[s]
+          + '<br><small style="font-weight:400;color:#555">PnL / Busts / MD1 / MD2</small></td>';
+    for (var si = 0; si < arr.length; si++) {
+      var sr = arr[si].results[s];
       if (!sr) { html += '<td style="color:#484f58">—</td>'; continue; }
       var pS  = (sr.pnl >= 0 ? '+$' : '-$') + Math.abs(sr.pnl).toFixed(2);
       var pC  = sr.pnl > 0 ? '#3fb950' : sr.pnl < 0 ? '#f85149' : '#8b949e';
       var buC = sr.busts > 0 ? '#f85149' : '#3fb950';
-      html += '<td><span style="color:' + pC + ';font-weight:700">' + pS + '</span>'
-            + ' <span style="color:' + buC + ';font-size:.75rem">B:' + sr.busts + '</span></td>';
+      var md1 = getMd1(sr), md2 = getMd2(sr);
+      var rank = topMap[si];
+      var ribbon = '', cellStyle = 'position:relative;padding-top:14px';
+      if (rank) {
+        var rs = rankStyle[rank];
+        ribbon = '<div style="position:absolute;top:0;right:0;background:' + rs.bg + ';color:' + rs.fg
+               + ';padding:2px 8px;font-size:.62rem;font-weight:800;border-radius:0 0 0 6px;letter-spacing:.06em;line-height:1.2;box-shadow:0 1px 4px rgba(0,0,0,.3)">' + rs.label + '</div>';
+        cellStyle += ';border:1px solid ' + rs.border + ';background:rgba(255,255,255,.02)';
+      }
+      html += '<td style="' + cellStyle + '">' + ribbon
+            + '<div style="color:' + pC + ';font-weight:700">' + pS + '</div>'
+            + '<div style="color:' + buC + ';font-size:.72rem">B: ' + sr.busts + '</div>'
+            + '<div style="color:#f0883e;font-size:.72rem">MD1: -$' + md1.toFixed(2) + '</div>'
+            + '<div style="color:#8b949e;font-size:.72rem">MD2: -$' + md2.toFixed(2) + '</div>'
+            + '</td>';
     }
-    html += '<td><button onclick="removeSnapshot(' + si + ')" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.85rem">✕</button></td></tr>';
+    html += '</tr>';
   }
   html += '</tbody></table></div>';
+
+  // Legend
+  html += '<div style="margin-top:14px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:.72rem;color:#8b949e">'
+        + '<span style="font-weight:700;color:#c9d1d9">Per row, the same strategy is ranked across coins/snapshots:</span>'
+        + '<span><span style="background:linear-gradient(135deg,#ffd700,#f0a500);color:#0d1117;padding:1px 6px;border-radius:4px;font-weight:800;font-size:.62rem">TOP 1</span> best combined PnL + MD1 + Busts</span>'
+        + '<span><span style="background:linear-gradient(135deg,#c9d1d9,#8b949e);color:#0d1117;padding:1px 6px;border-radius:4px;font-weight:800;font-size:.62rem">TOP 2</span></span>'
+        + '<span><span style="background:linear-gradient(135deg,#cd7f32,#8b4513);color:#fff;padding:1px 6px;border-radius:4px;font-weight:800;font-size:.62rem">TOP 3</span></span>'
+        + '</div>';
+
   body.innerHTML = html;
 }
 

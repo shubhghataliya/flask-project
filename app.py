@@ -372,47 +372,34 @@ def render_result(rows, dates, dates_iso, timeframe, filename):
 
 @app.route('/')
 def index():
-    return render_template('index.html', saved_files=get_saved_files())
-
-@app.route('/upload', methods=['POST'])
-def upload():
-    file = request.files.get('file')
-    if not file or not file.filename:
-        return render_template('index.html', error="Please select a file.", saved_files=get_saved_files())
-    if not file.filename.lower().endswith('.csv'):
-        return render_template('index.html', error="Please upload a CSV file.", saved_files=get_saved_files())
-    try:
-        content = file.read().decode('utf-8-sig')
-        safe_name = secure_filename(file.filename)
-        with open(os.path.join(UPLOAD_FOLDER, safe_name), 'w', encoding='utf-8') as f:
-            f.write(content)
-        rows, dates, dates_iso, timeframe = process_csv(content)
-        return render_result(rows, dates, dates_iso, timeframe, safe_name)
-    except Exception as e:
-        return render_template('index.html', error=str(e), saved_files=get_saved_files())
+    return render_template('result.html',
+                           dates=[], dates_iso=[], rows=[],
+                           up_count=0, down_count=0, total=0,
+                           timeframe='15m', filename='',
+                           saved_files=get_saved_files(), up_pct=0)
 
 @app.route('/load/<filename>')
 def load_file(filename):
     safe_name = secure_filename(filename)
     path = os.path.join(UPLOAD_FOLDER, safe_name)
     if not os.path.exists(path):
-        return render_template('index.html', error="File not found.", saved_files=get_saved_files())
+        return redirect('/')
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
         rows, dates, dates_iso, timeframe = process_csv(content)
         return render_result(rows, dates, dates_iso, timeframe, safe_name)
-    except Exception as e:
-        return render_template('index.html', error=str(e), saved_files=get_saved_files())
+    except Exception:
+        return redirect('/')
 
 @app.route('/fetch', methods=['POST'])
 def fetch_start():
     crypto   = request.form.get('crypto', 'btc').lower()
     interval = request.form.get('interval', '15m').lower()
     try:
-        count = max(1, min(int(request.form.get('count', 200)), 5000))
+        count = max(1, min(int(request.form.get('count', 2000)), 5000))
     except ValueError:
-        count = 200
+        count = 2000
 
     if crypto not in CRYPTO_CONFIG:
         return jsonify({'error': f'Unknown coin: {crypto}'}), 400
@@ -445,7 +432,7 @@ def fetch_status(job_id):
 def fetch_result(job_id):
     job = _jobs.pop(job_id, None)
     if not job or job['status'] != 'done' or not job['result']:
-        return render_template('index.html', error='Result expired or job failed.', saved_files=get_saved_files())
+        return redirect('/')
     rows, dates, dates_iso, timeframe, filename = job['result']
     return render_result(rows, dates, dates_iso, timeframe, filename)
 
