@@ -382,11 +382,14 @@
               </div>
             </div>
             <div class="row g-3 mb-4" id="istCards"></div>
-            <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Time Band</div>
-            <div style="position:relative;height:200px;margin-bottom:24px"><canvas id="istPnlChart"></canvas></div>
-            <div style="font-size:.75rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">PNL by Day of Week</div>
+          </div>
+
+          <!-- Day of Week Performance -->
+          <div class="panel mb-3" id="dowSection" style="display:none">
+            <div class="mb-3" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+              PNL by Day of Week
+            </div>
             <div class="row g-3 mb-4" id="dowCards"></div>
-            <div style="position:relative;height:200px"><canvas id="dowPnlChart"></canvas></div>
           </div>
 
           <!-- Cumulative PNL -->
@@ -395,6 +398,20 @@
               Cumulative PNL Over Time
             </div>
             <div style="position:relative;height:280px"><canvas id="cumPnlChart"></canvas></div>
+          </div>
+
+          <div class="panel mb-3" id="bustListSection" style="display:none">
+            <div class="mb-3" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+              Bust List &nbsp;<span id="bustListCount" style="font-weight:400;text-transform:none;color:#f85149"></span>
+            </div>
+            <div style="overflow-x:auto"><table class="atbl" id="bustTbl"></table></div>
+          </div>
+
+          <div class="panel mb-3" id="bustListSection" style="display:none">
+            <div class="mb-3" style="font-size:.78rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.05em">
+              Bust List &nbsp;<span id="bustListCount" style="font-weight:400;text-transform:none;color:#f85149"></span>
+            </div>
+            <div style="overflow-x:auto"><table class="atbl" id="bustTbl"></table></div>
           </div>
 
           <div class="panel">
@@ -412,6 +429,25 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
+// Restore live fetch params and active tab after redirect
+(function() {
+  var c = sessionStorage.getItem('lf_crypto');
+  var iv = sessionStorage.getItem('lf_interval');
+  var ct = sessionStorage.getItem('lf_count');
+  var goSim = sessionStorage.getItem('lf_goto_sim');
+  if (c)  { var el = document.getElementById('liveCrypto');   if (el) el.value = c; }
+  if (iv) { var el = document.getElementById('liveInterval'); if (el) el.value = iv; }
+  if (ct) { var el = document.getElementById('liveCount');    if (el) el.value = ct; }
+  sessionStorage.removeItem('lf_crypto');
+  sessionStorage.removeItem('lf_interval');
+  sessionStorage.removeItem('lf_count');
+  sessionStorage.removeItem('lf_goto_sim');
+  if (goSim) {
+    var simBtn = document.querySelector('[data-bs-target="#tabSim"]');
+    if (simBtn) { bootstrap.Tab.getOrCreateInstance(simBtn).show(); }
+  }
+})();
+
 var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
@@ -430,8 +466,6 @@ var allSimResults = {};
 var selectedStrat = null;
 var overlayOn     = false;
 var stepChartInst = null;
-var istPnlChartInst  = null;
-var dowPnlChartInst  = null;
 var cumPnlChartInst  = null;
 var currentLadder = [];
 
@@ -852,7 +886,8 @@ function runAllSims() {
 
   renderStratCards();
   document.getElementById('stratCompare').style.display = 'block';
-  showAnalytics('all_up');
+  showAnalytics('all_up', true);
+  document.getElementById('stratCompare').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ─── Overview cards ───
@@ -866,7 +901,7 @@ function renderStratCards() {
     var pnlC = r.grandPnl > 0 ? 'pos' : r.grandPnl < 0 ? 'neg' : 'neu';
     var buC  = r.grandBusts > 0 ? 'neg' : 'pos';
 
-    html += '<div class="col-6 col-md-3">'
+    html += '<div class="col-6 col-md">'
           + '<div class="strat-card" id="scard_' + s + '" onclick="showAnalytics(\'' + s + '\')">'
           + '<div class="strat-name">' + STRAT_LABELS[s] + '</div>'
           + '<div class="strat-desc">' + STRAT_DESCS[s] + '</div>'
@@ -883,7 +918,7 @@ function renderStratCards() {
 }
 
 // ─── Detailed analytics ───
-function showAnalytics(strat) {
+function showAnalytics(strat, noScroll) {
   selectedStrat = strat;
 
   for (var i = 0; i < STRATS.length; i++) {
@@ -901,6 +936,7 @@ function showAnalytics(strat) {
   renderBars(r.grandSteps, r.grandStepWins, currentLadder);
   renderIstSection(r.slotResults, r.overlaysMap);
   renderSlotTable(r.slotResults, currentLadder);
+  renderBustList(r.overlaysMap);
 
   document.getElementById('simDetails').style.display = 'block';
 
@@ -914,7 +950,7 @@ function showAnalytics(strat) {
   lbl.textContent   = '(' + STRAT_LABELS[strat] + ')';
   paintOriginal();
 
-  document.getElementById('simDetails').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!noScroll) document.getElementById('simDetails').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ─── Stat cards ───
@@ -984,6 +1020,43 @@ function renderBars(gs, gsw, ladder) {
     },
     plugins: [winRateLabelPlugin]
   });
+}
+
+// ─── Bust list ───
+function renderBustList(overlaysMap) {
+  var busts = [];
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var time = ROWS[ri].time;
+    var ovs  = overlaysMap[time];
+    if (!ovs) continue;
+    for (var di = 0; di < DATES.length; di++) {
+      var ov = ovs[di];
+      if (ov && ov.bust) busts.push({ time: time, date: DATES[di], bet: ov.bet, man: ov.man || null });
+    }
+  }
+
+  var section = document.getElementById('bustListSection');
+  if (!busts.length) { section.style.display = 'none'; return; }
+
+  document.getElementById('bustListCount').textContent = busts.length + ' bust' + (busts.length > 1 ? 's' : '');
+  section.style.display = 'block';
+
+  var html = '<thead><tr><th style="text-align:left">#</th><th style="text-align:left">Date</th><th style="text-align:left">Time Slot</th><th>Amount Lost</th>';
+  if (busts.some(function(b) { return b.man; })) html += '<th>Man</th>';
+  html += '</tr></thead><tbody>';
+  var hasMen = busts.some(function(b) { return b.man; });
+  for (var i = 0; i < busts.length; i++) {
+    var b = busts[i];
+    html += '<tr>'
+          + '<td style="text-align:left;color:#8b949e">' + (i + 1) + '</td>'
+          + '<td style="text-align:left;color:#e6edf3">' + b.date + '</td>'
+          + '<td style="text-align:left;color:#58a6ff">' + b.time + '</td>'
+          + '<td class="neg">-$' + b.bet.toFixed(2) + '</td>';
+    if (hasMen) html += '<td style="color:#8b949e">' + (b.man ? 'M' + b.man : '—') + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody>';
+  document.getElementById('bustTbl').innerHTML = html;
 }
 
 // ─── Per-slot table ───
@@ -1168,31 +1241,6 @@ function renderIstSection(slotResults, overlaysMap) {
   }
   document.getElementById('istCards').innerHTML = html;
 
-  // PNL bar chart
-  if (istPnlChartInst) { istPnlChartInst.destroy(); istPnlChartInst = null; }
-  var pnls   = bands.map(function(bd) { return parseFloat(bd.pnl.toFixed(2)); });
-  var bColors = pnls.map(function(p) { return p >= 0 ? '#3fb950' : '#f85149'; });
-  istPnlChartInst = new Chart(document.getElementById('istPnlChart').getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels: IST_BANDS.map(function(b) { return b.label; }),
-      datasets: [{ label: 'PNL ($)', data: pnls, backgroundColor: bColors, borderRadius: 6, borderSkipped: false }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: function(it) { return (it.raw >= 0 ? '+$' : '-$') + Math.abs(it.raw).toFixed(2); } } }
-      },
-      scales: {
-        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
-        y: { grid: { color: '#21262d' },
-             ticks: { color: '#8b949e', callback: function(v) { return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2); } },
-             title: { display: true, text: 'PNL ($)', color: '#8b949e' } }
-      }
-    }
-  });
-
   // Cumulative PNL line chart — single overall line across all dates
   if (cumPnlChartInst) { cumPnlChartInst.destroy(); cumPnlChartInst = null; }
   var bandDatePnl = computeDailyBandPnl(overlaysMap);
@@ -1238,6 +1286,7 @@ function renderIstSection(slotResults, overlaysMap) {
   renderDowPnlChart(overlaysMap);
 
   document.getElementById('istSection').style.display    = 'block';
+  document.getElementById('dowSection').style.display    = 'block';
   document.getElementById('cumPnlSection').style.display = 'block';
 }
 
@@ -1290,7 +1339,7 @@ function renderDowPnlChart(overlaysMap) {
     var pnlC  = ds.pnl >= 0 ? 'pos' : 'neg';
     var wrC   = wrNum >= 50 ? 'pos' : 'neg';
     var buC   = ds.busts > 0 ? 'neg' : 'pos';
-    html += '<div class="col-6 col-md-3 col-lg-2" style="min-width:140px">'
+    html += '<div class="col-6 col-sm-4 col-md-3 col-lg">'
           + '<div class="ist-card">'
           + '<div class="ist-band-label">' + dayLabels[d] + '</div>'
           + '<div class="ist-pnl ' + pnlC + '">' + pnlS + '</div>'
@@ -1303,32 +1352,6 @@ function renderDowPnlChart(overlaysMap) {
   }
   document.getElementById('dowCards').innerHTML = html;
 
-  // Render chart
-  if (dowPnlChartInst) { dowPnlChartInst.destroy(); dowPnlChartInst = null; }
-  var dayPnl    = computeDowPnl(overlaysMap);
-  var colors    = dayPnl.map(function(p) { return p >= 0 ? '#3fb950' : '#f85149'; });
-  var rounded   = dayPnl.map(function(p) { return parseFloat(p.toFixed(2)); });
-
-  dowPnlChartInst = new Chart(document.getElementById('dowPnlChart').getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels: dayLabels,
-      datasets: [{ label: 'PNL ($)', data: rounded, backgroundColor: colors, borderRadius: 6, borderSkipped: false }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: function(it) { return (it.raw >= 0 ? '+$' : '-$') + Math.abs(it.raw).toFixed(2); } } }
-      },
-      scales: {
-        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
-        y: { grid: { color: '#21262d' },
-             ticks: { color: '#8b949e', callback: function(v) { return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2); } },
-             title: { display: true, text: 'PNL ($)', color: '#8b949e' } }
-      }
-    }
-  });
 }
 
 // ─── Helpers ───
@@ -1395,6 +1418,10 @@ function pollLiveJob(jobId, total) {
         if (data.status === 'done') {
           clearInterval(interval);
           hideOverlay();
+          sessionStorage.setItem('lf_crypto',   document.getElementById('liveCrypto').value);
+          sessionStorage.setItem('lf_interval', document.getElementById('liveInterval').value);
+          sessionStorage.setItem('lf_count',    document.getElementById('liveCount').value);
+          sessionStorage.setItem('lf_goto_sim', '1');
           window.location.href = '/fetch-result/' + jobId;
         } else if (data.status === 'error') {
           clearInterval(interval);
