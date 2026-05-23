@@ -235,6 +235,7 @@
   <ul class="nav nav-tabs mb-0" role="tablist">
     <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabPivot" type="button">Pivot Table</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabSim" type="button">Martingale Sim</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabCompare" type="button" id="compareTabBtn">Compare <span id="compareCount" style="background:#1f6feb;color:#fff;border-radius:99px;padding:1px 7px;font-size:.7rem;margin-left:4px;display:none">0</span></button></li>
   </ul>
 
   <div class="tab-content">
@@ -365,6 +366,7 @@
             <div class="detail-header">
               <span class="strat-badge" id="detailBadge"></span>
               <span style="font-size:.82rem;color:#8b949e" id="detailDesc"></span>
+              <button onclick="saveSnapshot()" id="saveSnapBtn" style="margin-left:auto;background:#1a4731;border:1px solid #238636;color:#3fb950;border-radius:8px;padding:5px 14px;font-size:.78rem;font-weight:600;cursor:pointer">+ Save to Compare</button>
             </div>
             <div class="row g-3" id="detailCards"></div>
           </div>
@@ -420,6 +422,21 @@
           </div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ── COMPARE ── -->
+    <div class="tab-pane fade" id="tabCompare">
+      <div class="pt-3">
+        <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+          <div style="font-size:.72rem;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;font-weight:700">
+            Saved Snapshots — run a sim and click <strong style="color:#e6edf3">Save to Compare</strong>
+          </div>
+          <button onclick="clearAllSnapshots()" style="background:#4a1515;border:1px solid #da3633;color:#f85149;border-radius:8px;padding:5px 14px;font-size:.78rem;cursor:pointer">Clear All</button>
+        </div>
+        <div id="compareBody">
+          <div style="color:#484f58;font-size:.85rem;padding:40px 0;text-align:center">No snapshots saved yet.</div>
+        </div>
       </div>
     </div>
 
@@ -1439,6 +1456,117 @@ function hideOverlay(err) {
   document.getElementById('loadingOverlay').style.display = 'none';
   if (err) { alert(err); }
 }
+
+// ─── Compare snapshots ───
+var COMPARE_KEY = 'vortax_snapshots';
+
+function loadSnapshots() {
+  try { return JSON.parse(localStorage.getItem(COMPARE_KEY) || '[]'); } catch(e) { return []; }
+}
+function saveSnapshots(arr) { localStorage.setItem(COMPARE_KEY, JSON.stringify(arr)); }
+
+function saveSnapshot() {
+  if (!selectedStrat || !Object.keys(allSimResults).length) return;
+  var snapshots = loadSnapshots();
+  var mode = document.querySelector('input[name="simMode"]:checked').value;
+  var cooldown = parseInt(document.getElementById('cooldownIn').value, 10) || 0;
+  var numMen = mode === 'menbased' ? (parseInt(document.getElementById('menCount').value, 10) || 2) : null;
+  var label = '{{ filename }}';
+  var entry = {
+    label: label,
+    mode: mode,
+    numMen: numMen,
+    cooldown: cooldown,
+    ladder: currentLadder,
+    buyingPrice: currentBuyingPrice,
+    savedAt: new Date().toLocaleDateString(),
+    results: {}
+  };
+  for (var i = 0; i < STRATS.length; i++) {
+    var s = STRATS[i], r = allSimResults[s];
+    entry.results[s] = {
+      pnl:   parseFloat(r.grandPnl.toFixed(2)),
+      bets:  r.grandBets,
+      wins:  r.grandWins,
+      busts: r.grandBusts
+    };
+  }
+  snapshots.push(entry);
+  saveSnapshots(snapshots);
+  refreshCompareTab();
+  var btn = document.getElementById('saveSnapBtn');
+  btn.textContent = '✓ Saved!';
+  btn.style.background = '#0d2b1a';
+  setTimeout(function() { btn.textContent = '+ Save to Compare'; btn.style.background = '#1a4731'; }, 1800);
+}
+
+function clearAllSnapshots() {
+  if (!confirm('Clear all saved snapshots?')) return;
+  localStorage.removeItem(COMPARE_KEY);
+  refreshCompareTab();
+}
+
+function removeSnapshot(idx) {
+  var arr = loadSnapshots();
+  arr.splice(idx, 1);
+  saveSnapshots(arr);
+  refreshCompareTab();
+}
+
+function refreshCompareTab() {
+  var arr = loadSnapshots();
+  var badge = document.getElementById('compareCount');
+  if (arr.length) { badge.textContent = arr.length; badge.style.display = 'inline'; }
+  else            { badge.style.display = 'none'; }
+
+  var body = document.getElementById('compareBody');
+  if (!arr.length) {
+    body.innerHTML = '<div style="color:#484f58;font-size:.85rem;padding:40px 0;text-align:center">No snapshots saved yet.</div>';
+    return;
+  }
+
+  var stratOrder = ['all_up', 'all_down', 'same', 'opposite', 'custom'];
+  var html = '<div style="overflow-x:auto"><table class="atbl" style="min-width:700px">';
+  html += '<thead><tr>'
+        + '<th style="text-align:left">Coin / File</th>'
+        + '<th style="text-align:left">Parameters</th>'
+        + '<th style="text-align:left">Date</th>';
+  for (var i = 0; i < stratOrder.length; i++) {
+    html += '<th>' + STRAT_LABELS[stratOrder[i]] + '<br><small style="font-weight:400;color:#555">PnL / Busts</small></th>';
+  }
+  html += '<th></th></tr></thead><tbody>';
+
+  for (var si = 0; si < arr.length; si++) {
+    var e = arr[si];
+    var modeLabel = e.mode;
+    if (e.mode === 'menbased' && e.numMen) modeLabel = 'Men-Based (' + e.numMen + ' men)';
+    else if (e.mode === 'daywise') modeLabel = 'Day-wise';
+    else if (e.mode === 'simple') modeLabel = 'Simple';
+    var params = modeLabel
+               + ' &bull; Ladder: ' + (e.ladder || []).join(', ')
+               + ' &bull; Price: $' + (e.buyingPrice || 0).toFixed(2);
+    if (e.cooldown) params += ' &bull; Cooldown: ' + e.cooldown;
+    html += '<tr>'
+          + '<td style="text-align:left;color:#58a6ff;font-weight:700">' + e.label + '</td>'
+          + '<td style="text-align:left;color:#8b949e;font-size:.75rem;white-space:nowrap">' + params + '</td>'
+          + '<td style="text-align:left;color:#8b949e">' + e.savedAt + '</td>';
+    for (var i = 0; i < stratOrder.length; i++) {
+      var sr = e.results[stratOrder[i]];
+      if (!sr) { html += '<td style="color:#484f58">—</td>'; continue; }
+      var pS  = (sr.pnl >= 0 ? '+$' : '-$') + Math.abs(sr.pnl).toFixed(2);
+      var pC  = sr.pnl > 0 ? '#3fb950' : sr.pnl < 0 ? '#f85149' : '#8b949e';
+      var buC = sr.busts > 0 ? '#f85149' : '#3fb950';
+      html += '<td><span style="color:' + pC + ';font-weight:700">' + pS + '</span>'
+            + ' <span style="color:' + buC + ';font-size:.75rem">B:' + sr.busts + '</span></td>';
+    }
+    html += '<td><button onclick="removeSnapshot(' + si + ')" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.85rem">✕</button></td></tr>';
+  }
+  html += '</tbody></table></div>';
+  body.innerHTML = html;
+}
+
+// Init compare badge on load
+refreshCompareTab();
 </script>
 </body>
 </html>
