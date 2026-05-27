@@ -135,35 +135,9 @@ def fetch_markets_api(crypto, interval, count, job=None):
         if cursor:
             params['end_date_max'] = cursor
 
-        events = None
-        last_err = None
-        for attempt in range(5):
-            try:
-                resp = req.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
-                if resp.status_code >= 500:
-                    last_err = f"{resp.status_code} from upstream"
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-                resp.raise_for_status()
-                events = resp.json()
-                break
-            except req.exceptions.RequestException as e:
-                last_err = str(e)
-                time.sleep(1.5 * (attempt + 1))
-                continue
-
-        if events is None:
-            # Upstream kept failing on this page — nudge cursor back slightly and skip
-            if cursor:
-                try:
-                    from datetime import datetime, timedelta
-                    dt = datetime.strptime(cursor, '%Y-%m-%dT%H:%M:%SZ')
-                    cursor = (dt - timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
-                    continue
-                except Exception:
-                    pass
-            break
-
+        resp = req.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
+        resp.raise_for_status()
+        events = resp.json()
         if not events:
             break
 
