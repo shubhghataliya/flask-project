@@ -1159,6 +1159,12 @@ function renderBustList(overlaysMap) {
     }
   }
 
+  busts.sort(function(a, b) {
+    var da = new Date(DATES_ISO[DATES.indexOf(a.date)] + 'T00:00:00');
+    var db = new Date(DATES_ISO[DATES.indexOf(b.date)] + 'T00:00:00');
+    return da - db;
+  });
+
   var section = document.getElementById('bustListSection');
   if (!busts.length) { section.style.display = 'none'; return; }
 
