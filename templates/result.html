@@ -468,14 +468,15 @@ var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
 
-var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'custom'];
-var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', custom: 'Custom Pattern' };
+var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'custom', 'combined'];
+var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', custom: 'Custom Pattern', combined: 'Combined' };
 var STRAT_DESCS  = {
-  all_up:   'Always bet Up on every candle',
-  all_down: 'Always bet Down on every candle',
-  same:     'Follow the previous candle\'s direction (momentum)',
-  opposite: 'Fade the previous candle\'s direction (reversal)',
-  custom:   'Use a custom Up/Down pattern for each bet sequence.'
+  all_up:    'Always bet Up on every candle',
+  all_down:  'Always bet Down on every candle',
+  same:      'Follow the previous candle\'s direction (momentum)',
+  opposite:  'Fade the previous candle\'s direction (reversal)',
+  custom:    'Use a custom Up/Down pattern for each bet sequence.',
+  combined:  'Bet both Up and Down simultaneously on every candle with independent ladder step counters.'
 };
 
 var allSimResults = {};
@@ -528,6 +529,11 @@ function parseCustomPattern() {
 // and the top two are surfaced as MD1 (deepest) and MD2 (next deepest).
 // ─────────────────────────────────────────────────────────────────
 function _top2(arr) { arr.sort(function(a, b) { return b - a; }); return [arr[0] || 0, arr[1] || 0]; }
+function getOvPnl(ov) {
+  if (!ov || ov.skipped) return 0;
+  if (ov.combined) return ov.netPnl;
+  return ov.won ? ov.winProfit : -ov.bet;
+}
 
 function computeChronoMDs(overlaysMap) {
   var running = 0, peak = 0, trough = 0, inDD = false;
@@ -538,7 +544,7 @@ function computeChronoMDs(overlaysMap) {
       if (!ovs) continue;
       var ov = ovs[di];
       if (!ov || ov.skipped) continue;
-      running += ov.won ? ov.winProfit : -ov.bet;
+      running += getOvPnl(ov);
       if (running >= peak) {
         if (inDD) { ep.push(peak - trough); inDD = false; }
         peak = running;
@@ -563,7 +569,7 @@ function computeBandMDs(overlaysMap) {
       if (!ovs) continue;
       var ov = ovs[di];
       if (!ov || ov.skipped) continue;
-      running[b] += ov.won ? ov.winProfit : -ov.bet;
+      running[b] += getOvPnl(ov);
       if (running[b] >= peak[b]) {
         if (inDD[b]) { ep[b].push(peak[b] - trough[b]); inDD[b] = false; }
         peak[b] = running[b];
@@ -592,7 +598,7 @@ function computeDowMDs(overlaysMap) {
       if (!ovs) continue;
       var ov = ovs[di];
       if (!ov || ov.skipped) continue;
-      running[dow] += ov.won ? ov.winProfit : -ov.bet;
+      running[dow] += getOvPnl(ov);
       if (running[dow] >= peak[dow]) {
         if (inDD[dow]) { ep[dow].push(peak[dow] - trough[dow]); inDD[dow] = false; }
         peak[dow] = running[dow];
@@ -958,7 +964,124 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
 
 var currentBuyingPrice = 0.50;
 
-// ─── Run all 4 strategies with selected mode ───
+// ─────────────────────────────────────────────────────────────────
+// COMBINED MARTINGALE
+// Both All Up and All Down run simultaneously on every candle.
+// Each has its own independent step counter.
+// One always wins, one always loses per candle.
+// ─────────────────────────────────────────────────────────────────
+function simulateCombined(mode, ladder, buyPrice, cooldown, numMen) {
+  buyPrice = buyPrice || 0.50;
+  cooldown = cooldown || 0;
+  var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
+  var grandSteps = [], grandStepWins = [];
+  for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
+
+  var overlaysMap = {}, slotMap = {};
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var t = ROWS[ri].time, arr = [], stc = [];
+    for (var di = 0; di < DATES.length; di++) arr.push(null);
+    for (var si = 0; si < ladder.length; si++) stc.push(0);
+    overlaysMap[t] = arr;
+    slotMap[t] = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
+  }
+
+  function playCandle(actual, stepUp, stepDown, slotKey) {
+    var betUp = ladder[stepUp], betDown = ladder[stepDown];
+    var wpUp  = betUp  * (1 - buyPrice) / buyPrice;
+    var wpDown= betDown* (1 - buyPrice) / buyPrice;
+    var upWon = (actual === 'Up');
+    var bustUp = false, bustDown = false;
+    var netPnl = 0;
+
+    grandBets++; slotMap[slotKey].total++;
+
+    grandSteps[stepUp]++;   slotMap[slotKey].stepCts[stepUp]++;
+    grandSteps[stepDown]++; slotMap[slotKey].stepCts[stepDown]++;
+
+    if (upWon) {
+      netPnl = wpUp - betDown;
+      grandPnl += netPnl; slotMap[slotKey].pnl += netPnl;
+      grandStepWins[stepUp]++;
+      if (netPnl > 0) { grandWins++; slotMap[slotKey].wins++; }
+      else slotMap[slotKey].losses++;
+      stepUp = 0;
+      if (stepDown >= ladder.length - 1) { bustDown = true; grandBusts++; slotMap[slotKey].busts++; stepDown = 0; }
+      else stepDown++;
+    } else {
+      netPnl = wpDown - betUp;
+      grandPnl += netPnl; slotMap[slotKey].pnl += netPnl;
+      grandStepWins[stepDown]++;
+      if (netPnl > 0) { grandWins++; slotMap[slotKey].wins++; }
+      else slotMap[slotKey].losses++;
+      stepDown = 0;
+      if (stepUp >= ladder.length - 1) { bustUp = true; grandBusts++; slotMap[slotKey].busts++; stepUp = 0; }
+      else stepUp++;
+    }
+    return { stepUp: stepUp, stepDown: stepDown, netPnl: parseFloat(netPnl.toFixed(4)),
+             upWon: upWon, bustUp: bustUp, bustDown: bustDown, betUp: betUp, betDown: betDown,
+             bust: bustUp || bustDown, combined: true };
+  }
+
+  if (mode === 'simple') {
+    var stepUp = 0, stepDown = 0, cdLeft = 0;
+    for (var di = 0; di < DATES.length; di++) {
+      for (var ri = 0; ri < ROWS.length; ri++) {
+        var row = ROWS[ri], actual = row.cells[di];
+        if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
+        if (cdLeft > 0) { overlaysMap[row.time][di] = { skipped: true }; cdLeft--; continue; }
+        var res = playCandle(actual, stepUp, stepDown, row.time);
+        stepUp = res.stepUp; stepDown = res.stepDown;
+        if (res.netPnl > 0) cdLeft = cooldown;
+        overlaysMap[row.time][di] = res;
+      }
+    }
+  } else if (mode === 'daywise') {
+    for (var ri = 0; ri < ROWS.length; ri++) {
+      var row = ROWS[ri], stepUp = 0, stepDown = 0, cdLeft = 0;
+      for (var di = 0; di < DATES.length; di++) {
+        var actual = row.cells[di];
+        if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
+        if (cdLeft > 0) { overlaysMap[row.time][di] = { skipped: true }; cdLeft--; continue; }
+        var res = playCandle(actual, stepUp, stepDown, row.time);
+        stepUp = res.stepUp; stepDown = res.stepDown;
+        if (res.netPnl > 0) cdLeft = cooldown;
+        overlaysMap[row.time][di] = res;
+      }
+    }
+  } else {
+    var allEvents = [];
+    for (var di = 0; di < DATES.length; di++)
+      for (var ri = 0; ri < ROWS.length; ri++) {
+        var actual = ROWS[ri].cells[di];
+        if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
+        allEvents.push({ time: ROWS[ri].time, di: di, actual: actual });
+      }
+    var manEvents = [];
+    for (var m = 0; m < numMen; m++) manEvents.push([]);
+    for (var i = 0; i < allEvents.length; i++) manEvents[i % numMen].push(allEvents[i]);
+    for (var m = 0; m < numMen; m++) {
+      var stepUp = 0, stepDown = 0, cdLeft = 0, events = manEvents[m];
+      for (var i = 0; i < events.length; i++) {
+        var ev = events[i];
+        if (cdLeft > 0) { overlaysMap[ev.time][ev.di] = { skipped: true, man: m+1 }; cdLeft--; continue; }
+        var res = playCandle(ev.actual, stepUp, stepDown, ev.time);
+        stepUp = res.stepUp; stepDown = res.stepDown;
+        if (res.netPnl > 0) cdLeft = cooldown;
+        res.man = m + 1;
+        overlaysMap[ev.time][ev.di] = res;
+      }
+    }
+  }
+
+  var slotResults = [];
+  for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
+  return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
+           grandSteps: grandSteps, grandStepWins: grandStepWins,
+           slotResults: slotResults, overlaysMap: overlaysMap };
+}
+
+// ─── Run all strategies with selected mode ───
 function runAllSims() {
   var ladder = parseLadder();
   if (!ladder) return;
@@ -990,9 +1113,12 @@ function runAllSims() {
     engine = function(s, l) { return simulateSimple(s, l, bp, cooldown, customPattern, customReset); };
   }
 
+  var combinedMode = mode, combinedMen = (mode === 'menbased') ? (parseInt(document.getElementById('menCount').value, 10) || 2) : 2;
   allSimResults = {};
   for (var i = 0; i < STRATS.length; i++) {
-    var r = engine(STRATS[i], ladder);
+    var r = STRATS[i] === 'combined'
+          ? simulateCombined(combinedMode, ladder, bp, cooldown, combinedMen)
+          : engine(STRATS[i], ladder);
     r.grandMDs = computeChronoMDs(r.overlaysMap);
     r.bandMDs  = computeBandMDs(r.overlaysMap);
     r.dowMDs   = computeDowMDs(r.overlaysMap);
@@ -1281,6 +1407,13 @@ function paintOverlay() {
       }
 
       var mTag = ov.man ? '<span style="font-size:.65rem;color:#8b949e;font-weight:400"> M' + ov.man + '</span>' : '';
+      if (ov.combined) {
+        var nc  = ov.netPnl > 0 ? '#7ee787' : ov.netPnl < 0 ? '#ff7b72' : '#8b949e';
+        var ns  = (ov.netPnl >= 0 ? '+' : '') + ov.netPnl.toFixed(2);
+        var bst = (ov.bustUp || ov.bustDown) ? '<span style="color:#f0883e;font-size:.65rem"> B</span>' : '';
+        td.innerHTML = '<span style="color:' + nc + ';font-weight:700">' + ns + bst + mTag + '</span>';
+        continue;
+      }
       var wp = (ov.winProfit !== undefined ? ov.winProfit : ov.bet).toFixed(2);
       if (ov.bust) {
         td.innerHTML = '<span style="color:#f0883e;font-weight:800">BUST&nbsp;&minus;' + ov.bet.toFixed(2) + mTag + '</span>';
@@ -1340,7 +1473,7 @@ function computeDailyBandPnl(overlaysMap) {
     for (var di = 0; di < DATES.length; di++) {
       var ov = ovs[di];
       if (!ov) continue;
-      bandDatePnl[band][di] += ov.won ? ov.winProfit : -ov.bet;
+      bandDatePnl[band][di] += getOvPnl(ov);
     }
   }
   return bandDatePnl;
@@ -1435,7 +1568,7 @@ function computeDowPnl(overlaysMap) {
       var ov = ovs[di];
       if (!ov || ov.skipped) continue;
       var dow = new Date(DATES_ISO[di] + 'T00:00:00').getDay();
-      dayPnl[dow] += ov.won ? ov.winProfit : -ov.bet;
+      dayPnl[dow] += getOvPnl(ov);
     }
   }
   return dayPnl;
@@ -1451,11 +1584,11 @@ function computeDowStats(overlaysMap) {
       var ov = ovs[di];
       if (!ov || ov.skipped) continue;
       var dow = new Date(DATES_ISO[di] + 'T00:00:00').getDay();
-      dayStats[dow].pnl    += ov.won ? ov.winProfit : -ov.bet;
+      dayStats[dow].pnl    += getOvPnl(ov);
       dayStats[dow].total++;
-      if (ov.won) dayStats[dow].wins++;
-      else        dayStats[dow].losses++;
-      if (ov.bust) dayStats[dow].busts++;
+      if (ov.combined) { if (ov.netPnl > 0) dayStats[dow].wins++; else dayStats[dow].losses++; }
+      else { if (ov.won) dayStats[dow].wins++; else dayStats[dow].losses++; }
+      if (ov.bust || ov.bustUp || ov.bustDown) dayStats[dow].busts++;
     }
   }
   return dayStats;
