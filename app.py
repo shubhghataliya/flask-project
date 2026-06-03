@@ -397,7 +397,7 @@ def fetch_start():
     crypto   = request.form.get('crypto', 'btc').lower()
     interval = request.form.get('interval', '15m').lower()
     try:
-        count = max(1, min(int(request.form.get('count', 2000)), 10000))
+        count = max(1, int(request.form.get('count', 2000)))
     except ValueError:
         count = 2000
 
