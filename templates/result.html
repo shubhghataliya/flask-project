@@ -468,13 +468,14 @@ var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
 
-var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'custom', 'combined'];
-var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', custom: 'Custom Pattern', combined: 'Combined' };
+var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'custom', 'combined'];
+var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', interlock_opposite: 'Interlock Opposite', custom: 'Custom Pattern', combined: 'Combined' };
 var STRAT_DESCS  = {
   all_up:    'Always bet Up on every candle',
   all_down:  'Always bet Down on every candle',
   same:      'Follow the previous candle\'s direction (momentum)',
   opposite:  'Fade the previous candle\'s direction (reversal)',
+  interlock_opposite: 'Fade the immediately-preceding candle in the shared timeline. In Men-Based mode each man fades the candle the previous man just played while running his own ladder; reduces to Opposite in other modes.',
   custom:    'Use a custom Up/Down pattern for each bet sequence.',
   combined:  'Bet both Up and Down simultaneously on every candle with independent ladder step counters.'
 };
@@ -659,7 +660,7 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
       var actual = row.cells[di];
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
 
-      if (strategy === 'same' || strategy === 'opposite') {
+      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite') {
         if (!prevRes) { prevRes = actual; continue; }
       }
 
@@ -770,7 +771,7 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
 
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
 
-      if (strategy === 'same' || strategy === 'opposite') {
+      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite') {
         if (!prevRes) { prevRes = actual; continue; }
       }
 
@@ -869,13 +870,18 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
     slotMap[t] = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
   }
 
-  // Collect all valid candles chronologically
+  // Collect all valid candles chronologically. gprev = the actual result of
+  // the immediately-preceding candle in this shared timeline (used by the
+  // interlock_opposite strategy so each man fades the candle the previous
+  // man just played, not his own previous candle).
   var allEvents = [];
+  var lastActual = null;
   for (var di = 0; di < DATES.length; di++) {
     for (var ri = 0; ri < ROWS.length; ri++) {
       var actual = ROWS[ri].cells[di];
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
-      allEvents.push({ time: ROWS[ri].time, di: di, actual: actual });
+      allEvents.push({ time: ROWS[ri].time, di: di, actual: actual, gprev: lastActual });
+      lastActual = actual;
     }
   }
 
@@ -892,7 +898,7 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
       var ev = events[i];
       var actual = ev.actual;
 
-      if (strategy === 'same' || strategy === 'opposite') {
+      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite') {
         if (!prevRes) { prevRes = actual; continue; }
       }
 
@@ -904,11 +910,12 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
       }
 
       var betDir;
-      if      (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
-      else if (strategy === 'all_up')   { betDir = 'Up'; }
-      else if (strategy === 'all_down') { betDir = 'Down'; }
-      else if (strategy === 'same')     { betDir = prevRes; }
-      else                              { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
+      if      (strategy === 'custom')             { betDir = customPattern[patternPos % customPattern.length]; }
+      else if (strategy === 'all_up')             { betDir = 'Up'; }
+      else if (strategy === 'all_down')           { betDir = 'Down'; }
+      else if (strategy === 'same')               { betDir = prevRes; }
+      else if (strategy === 'interlock_opposite') { betDir = (ev.gprev === 'Up') ? 'Down' : 'Up'; }
+      else                                        { betDir = (prevRes === 'Up') ? 'Down' : 'Up'; }
 
       var betAmt = ladder[step], curStep = step;
 
@@ -1786,7 +1793,7 @@ function refreshCompareTab() {
     return;
   }
 
-  var stratOrder = ['all_up', 'all_down', 'same', 'opposite', 'custom'];
+  var stratOrder = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'custom'];
 
   // Header row: one column per snapshot. Each snapshot column holds file label,
   // parameters and date stacked vertically so the table reads "strategy across snapshots".
