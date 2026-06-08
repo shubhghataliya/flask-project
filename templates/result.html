@@ -1388,6 +1388,20 @@ function paintOverlay() {
   var ovMap = allSimResults[selectedStrat].overlaysMap;
   var rows  = document.getElementById('pivotBody').rows;
 
+  // Global running PnL per cell, accumulated in true chronological order
+  // (date outer, time inner) so the violet bracket mirrors the Cumulative
+  // PNL chart cell-by-cell. Skipped (cooldown) cells don't contribute.
+  var cumMap = {};
+  for (var ci = 0; ci < ROWS.length; ci++) cumMap[ROWS[ci].time] = [];
+  var runPnl = 0;
+  for (var cdi = 0; cdi < DATES.length; cdi++) {
+    for (var cri = 0; cri < ROWS.length; cri++) {
+      var ct = ROWS[cri].time;
+      var co = ovMap[ct] ? ovMap[ct][cdi] : null;
+      if (co && !co.skipped) { runPnl += getOvPnl(co); cumMap[ct][cdi] = runPnl; }
+    }
+  }
+
   for (var r = 0; r < rows.length; r++) {
     var time  = rows[r].getAttribute('data-time');
     var ovs   = ovMap[time];
@@ -1416,20 +1430,23 @@ function paintOverlay() {
       }
 
       var mTag = ov.man ? '<span style="font-size:.65rem;color:#8b949e;font-weight:400"> M' + ov.man + '</span>' : '';
+      var cum  = cumMap[time] ? cumMap[time][c - 1] : undefined;
+      var cumTag = (cum === undefined) ? '' :
+        ' <span style="color:#d2a8ff;font-size:.68rem;font-weight:600">(' + (cum >= 0 ? '+' : '−') + Math.abs(cum).toFixed(2) + ')</span>';
       if (ov.combined) {
         var nc  = ov.netPnl > 0 ? '#7ee787' : ov.netPnl < 0 ? '#ff7b72' : '#8b949e';
         var ns  = (ov.netPnl >= 0 ? '+' : '') + ov.netPnl.toFixed(2);
         var bst = (ov.bustUp || ov.bustDown) ? '<span style="color:#f0883e;font-size:.65rem"> B</span>' : '';
-        td.innerHTML = '<span style="color:' + nc + ';font-weight:700">' + ns + bst + mTag + '</span>';
+        td.innerHTML = '<span style="color:' + nc + ';font-weight:700">' + ns + bst + cumTag + mTag + '</span>';
         continue;
       }
       var wp = (ov.winProfit !== undefined ? ov.winProfit : ov.bet).toFixed(2);
       if (ov.bust) {
-        td.innerHTML = '<span style="color:#f0883e;font-weight:800">BUST&nbsp;&minus;' + ov.bet.toFixed(2) + mTag + '</span>';
+        td.innerHTML = '<span style="color:#f0883e;font-weight:800">BUST&nbsp;&minus;' + ov.bet.toFixed(2) + cumTag + mTag + '</span>';
       } else if (ov.won) {
-        td.innerHTML = '<span style="color:#7ee787;font-weight:700">W&nbsp;+' + wp + mTag + '</span>';
+        td.innerHTML = '<span style="color:#7ee787;font-weight:700">W&nbsp;+' + wp + cumTag + mTag + '</span>';
       } else {
-        td.innerHTML = '<span style="color:#ff7b72;font-weight:700">L&nbsp;&minus;' + ov.bet.toFixed(2) + mTag + '</span>';
+        td.innerHTML = '<span style="color:#ff7b72;font-weight:700">L&nbsp;&minus;' + ov.bet.toFixed(2) + cumTag + mTag + '</span>';
       }
     }
   }
