@@ -244,6 +244,7 @@
       <div class="py-2 d-flex align-items-center gap-2">
         <button class="btn-overlay" id="overlayBtn" onclick="toggleOverlay()" style="display:none">Show Sim Overlay</button>
         <span id="overlayLabel" style="display:none;font-size:.75rem;color:#8b949e"></span>
+        <button class="btn-overlay" id="timeFormatBtn" onclick="toggleTimeFormat()" title="Toggle between 12h and 24h time format">24h Time</button>
       </div>
       <div class="table-wrap">
         <table class="pivot">
@@ -467,6 +468,47 @@
 var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
+
+// ─── Time Format Toggle ───
+var timeFormat24h = false; // false = 12h, true = 24h
+
+function convertTo24h(time12h) {
+  var m = time12h.match(/^(\d+)(?::(\d+))?(AM|PM)$/i);
+  if (!m) return time12h;
+  var h = parseInt(m[1]), mins = parseInt(m[2] || '0'), p = m[3].toUpperCase();
+  if (p === 'AM') h = (h === 12) ? 0 : h;
+  else            h = (h === 12) ? 12 : h + 12;
+  return (h < 10 ? '0' : '') + h + ':' + (mins < 10 ? '0' : '') + mins;
+}
+
+function convertTo12h(time24h) {
+  var m = time24h.match(/^(\d+):(\d+)$/);
+  if (!m) return time24h;
+  var h = parseInt(m[1]), mins = parseInt(m[2]);
+  var p = h >= 12 ? 'PM' : 'AM';
+  if (h > 12) h -= 12;
+  else if (h === 0) h = 12;
+  return h + (mins > 0 ? ':' + (mins < 10 ? '0' : '') + mins : '') + p;
+}
+
+function toggleTimeFormat() {
+  timeFormat24h = !timeFormat24h;
+  var btn = document.getElementById('timeFormatBtn');
+  btn.textContent = timeFormat24h ? '12h Time' : '24h Time';
+  btn.classList.toggle('on', timeFormat24h);
+  
+  // Update all time cells in the pivot table
+  var timeCells = document.querySelectorAll('#pivotBody tr td.time-col');
+  timeCells.forEach(function(cell) {
+    var time12h = cell.textContent.trim();
+    if (timeFormat24h) {
+      cell.dataset.original = time12h;
+      cell.textContent = convertTo24h(time12h);
+    } else {
+      cell.textContent = cell.dataset.original || time12h;
+    }
+  });
+}
 
 var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'interlock_same', 'custom', 'combined'];
 var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', interlock_opposite: 'Interlock Opposite', interlock_same: 'Interlock Same', custom: 'Custom Pattern', combined: 'Combined' };
