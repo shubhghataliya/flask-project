@@ -144,7 +144,8 @@ def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=N
 
     all_markets = []
     seen_ids = set()
-    cursor = end_iso   # begin pagination at the upper bound when an end date is set
+    cursor    = end_iso   # current upper bound string (end_date_max)
+    cursor_ts = end_ts    # same bound as a Timestamp, for safe comparisons
 
     while len(all_markets) < count:
         params = {
@@ -159,8 +160,13 @@ def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=N
             params['exclude_tag_id'] = list(excluded)
         if cursor:
             params['end_date_max'] = cursor
+        # Only add the lower bound when it is strictly below the upper bound;
+        # the API rejects end_date_min >= end_date_max with a 422 "invalid time range".
         if start_iso:
-            params['end_date_min'] = start_iso
+            if cursor_ts is None or start_ts < cursor_ts:
+                params['end_date_min'] = start_iso
+            else:
+                break   # range window collapsed — nothing left to fetch
 
         resp = req.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
         resp.raise_for_status()
@@ -205,12 +211,12 @@ def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=N
         oldest = min((e.get('endDate', '') for e in events if e.get('endDate')), default=None)
         if not oldest or oldest == cursor:
             break
-        # Stop once we've paged past the start of the requested range.
-        if start_ts is not None:
-            oldest_ts = pd.to_datetime(oldest, utc=True, errors='coerce')
-            if pd.notna(oldest_ts) and oldest_ts < start_ts:
-                break
-        cursor = oldest
+        oldest_ts = pd.to_datetime(oldest, utc=True, errors='coerce')
+        # Stop once we've reached (or passed) the start of the requested range.
+        if start_ts is not None and pd.notna(oldest_ts) and oldest_ts <= start_ts:
+            break
+        cursor    = oldest
+        cursor_ts = oldest_ts
         time.sleep(0.2)
 
     all_markets.sort(key=lambda m: m.get('endDate', ''), reverse=True)
