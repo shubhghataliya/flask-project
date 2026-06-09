@@ -106,9 +106,27 @@ def _get_resolution(market):
 _jobs = {}   # job_id -> dict with keys: status, fetched, total, result, error
 
 
-def fetch_markets_api(crypto, interval, count, job=None):
+def _et_to_utc(dt_str):
+    """Parse a naive 'YYYY-MM-DDTHH:MM' string as US/Eastern (ET) and return a
+    UTC-aware Timestamp, or None if empty/unparseable. DST is handled by the
+    America/New_York zone."""
+    if not dt_str:
+        return None
+    ts = pd.to_datetime(dt_str, errors='coerce')
+    if pd.isna(ts):
+        return None
+    try:
+        ts = ts.tz_localize('America/New_York', ambiguous=True, nonexistent='shift_forward')
+    except Exception:
+        ts = ts.tz_localize('America/New_York')
+    return ts.tz_convert('UTC')
+
+
+def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=None):
     """
-    Fetch `count` most-recent resolved markets from Polymarket.
+    Fetch up to `count` resolved markets from Polymarket.
+    If `start_dt` / `end_dt` (ISO datetime strings) are given, only markets whose
+    close time (endDate, UTC) falls within [start_dt, end_dt] are returned.
     If `job` dict is provided, updates job['fetched'] live for progress polling.
     """
     cfg = CRYPTO_CONFIG[crypto]
@@ -117,9 +135,16 @@ def fetch_markets_api(crypto, interval, count, job=None):
     keywords = cfg['keywords']
     non_keywords = cfg['non_keywords']
 
+    # Optional date-range bounds. Inputs are interpreted as US/Eastern (ET) and
+    # converted to UTC to compare against each market's UTC close (endDate).
+    start_ts = _et_to_utc(start_dt)
+    end_ts   = _et_to_utc(end_dt)
+    start_iso = start_ts.strftime('%Y-%m-%dT%H:%M:%SZ') if start_ts is not None else None
+    end_iso   = end_ts.strftime('%Y-%m-%dT%H:%M:%SZ')   if end_ts   is not None else None
+
     all_markets = []
     seen_ids = set()
-    cursor = None
+    cursor = end_iso   # begin pagination at the upper bound when an end date is set
 
     while len(all_markets) < count:
         params = {
@@ -134,6 +159,8 @@ def fetch_markets_api(crypto, interval, count, job=None):
             params['exclude_tag_id'] = list(excluded)
         if cursor:
             params['end_date_max'] = cursor
+        if start_iso:
+            params['end_date_min'] = start_iso
 
         resp = req.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
         resp.raise_for_status()
@@ -155,26 +182,34 @@ def fetch_markets_api(crypto, interval, count, job=None):
                 continue
             for m in event.get('markets', []):
                 mid = m.get('id')
-                if mid and mid not in seen_ids:
-                    seen_ids.add(mid)
-                    m['_event_title'] = title
-                    batch_markets.append(m)
+                if not mid or mid in seen_ids:
+                    continue
+                # Keep only markets whose own close time is inside the range.
+                if start_ts is not None or end_ts is not None:
+                    edt = pd.to_datetime(m.get('endDate'), utc=True, errors='coerce')
+                    if pd.isna(edt):
+                        continue
+                    if start_ts is not None and edt < start_ts:
+                        continue
+                    if end_ts is not None and edt > end_ts:
+                        continue
+                seen_ids.add(mid)
+                m['_event_title'] = title
+                batch_markets.append(m)
 
-        if not batch_markets:
-            oldest = min((e.get('endDate', '') for e in events if e.get('endDate')), default=None)
-            if not oldest or oldest == cursor:
-                break
-            cursor = oldest
-            time.sleep(0.2)
-            continue
-
-        all_markets.extend(batch_markets)
-        if job is not None:
-            job['fetched'] = min(len(all_markets), count)
+        if batch_markets:
+            all_markets.extend(batch_markets)
+            if job is not None:
+                job['fetched'] = min(len(all_markets), count)
 
         oldest = min((e.get('endDate', '') for e in events if e.get('endDate')), default=None)
         if not oldest or oldest == cursor:
             break
+        # Stop once we've paged past the start of the requested range.
+        if start_ts is not None:
+            oldest_ts = pd.to_datetime(oldest, utc=True, errors='coerce')
+            if pd.notna(oldest_ts) and oldest_ts < start_ts:
+                break
         cursor = oldest
         time.sleep(0.2)
 
@@ -182,13 +217,16 @@ def fetch_markets_api(crypto, interval, count, job=None):
     return all_markets[:count]
 
 
-def _run_fetch_job(job_id, crypto, interval, count):
+def _run_fetch_job(job_id, crypto, interval, count, start_dt=None, end_dt=None):
     job = _jobs[job_id]
     try:
-        markets = fetch_markets_api(crypto, interval, count, job)
+        markets = fetch_markets_api(crypto, interval, count, job, start_dt, end_dt)
         if not markets:
             job['status'] = 'error'
-            job['error'] = 'No markets returned from API. Try a different coin or interval.'
+            job['error'] = ('No markets found for the selected date range. '
+                            'Try widening the dates, or a different coin/interval.') \
+                           if (start_dt or end_dt) \
+                           else 'No markets returned from API. Try a different coin or interval.'
             return
         rows, dates, dates_iso, timeframe = process_markets(markets, interval)
         job['result'] = (rows, dates, dates_iso, timeframe,
@@ -396,6 +434,8 @@ def load_file(filename):
 def fetch_start():
     crypto   = request.form.get('crypto', 'btc').lower()
     interval = request.form.get('interval', '15m').lower()
+    start_dt = request.form.get('start') or None
+    end_dt   = request.form.get('end') or None
     try:
         count = max(1, int(request.form.get('count', 2000)))
     except ValueError:
@@ -409,7 +449,8 @@ def fetch_start():
     job_id = str(uuid.uuid4())
     _jobs[job_id] = {'status': 'running', 'fetched': 0, 'total': count, 'result': None, 'error': None}
 
-    t = threading.Thread(target=_run_fetch_job, args=(job_id, crypto, interval, count), daemon=True)
+    t = threading.Thread(target=_run_fetch_job,
+                         args=(job_id, crypto, interval, count, start_dt, end_dt), daemon=True)
     t.start()
 
     return jsonify({'job_id': job_id})

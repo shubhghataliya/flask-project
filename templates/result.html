@@ -198,8 +198,8 @@
   <!-- Live Fetch Panel -->
   <div class="live-fetch-panel">
     <div class="live-fetch-label">Fetch Live Market Data</div>
-    <div class="row g-2 mb-3">
-      <div class="col-md-3 col-sm-6">
+    <div class="row g-2 mb-2">
+      <div class="col-md-4 col-sm-6">
         <div class="flabel">Coin</div>
         <select class="form-select" id="liveCrypto">
           <option value="btc">BTC – Bitcoin</option>
@@ -211,7 +211,7 @@
           <option value="hype">HYPE – Hyperliquid</option>
         </select>
       </div>
-      <div class="col-md-3 col-sm-6">
+      <div class="col-md-4 col-sm-6">
         <div class="flabel">Interval</div>
         <select class="form-select" id="liveInterval">
           <option value="5m">5 min</option>
@@ -220,14 +220,31 @@
           <option value="4h">4 hours</option>
         </select>
       </div>
-      <div class="col-md-3 col-sm-6">
-        <div class="flabel">Markets</div>
+      <div class="col-md-4 col-sm-6">
+        <div class="flabel">Max Markets</div>
         <input class="form-control" type="number" id="liveCount" value="2000" min="10" max="10000" step="10">
       </div>
-      <div class="col-md-3 col-sm-6 d-flex align-items-end">
-        <button type="button" class="btn btn-fetch-live text-white" onclick="startLiveFetch()">Fetch &amp; Update →</button>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-12">
+        <div class="flabel" style="margin-bottom:2px">Date Range
+          <span style="font-weight:400;text-transform:none;color:#484f58">— optional, filters by market close time (ET). Leave blank for most-recent.</span>
+        </div>
+      </div>
+      <div class="col-md-4 col-sm-6">
+        <div class="flabel">Start</div>
+        <input class="form-control" type="datetime-local" id="liveStart">
+      </div>
+      <div class="col-md-4 col-sm-6">
+        <div class="flabel">End</div>
+        <input class="form-control" type="datetime-local" id="liveEnd">
+      </div>
+      <div class="col-md-4 col-sm-6 d-flex align-items-end">
+        <button type="button" class="btn" onclick="clearDateRange()"
+          style="background:#21262d;border:1px solid #30363d;color:#8b949e;border-radius:8px;padding:8px 16px;font-size:.82rem">Clear dates</button>
       </div>
     </div>
+    <button type="button" class="btn btn-fetch-live text-white" onclick="startLiveFetch()">Fetch &amp; Update →</button>
   </div>
 
   <!-- Tabs -->
@@ -450,13 +467,19 @@
   var c = sessionStorage.getItem('lf_crypto');
   var iv = sessionStorage.getItem('lf_interval');
   var ct = sessionStorage.getItem('lf_count');
+  var st = sessionStorage.getItem('lf_start');
+  var en = sessionStorage.getItem('lf_end');
   var goSim = sessionStorage.getItem('lf_goto_sim');
   if (c)  { var el = document.getElementById('liveCrypto');   if (el) el.value = c; }
   if (iv) { var el = document.getElementById('liveInterval'); if (el) el.value = iv; }
   if (ct) { var el = document.getElementById('liveCount');    if (el) el.value = ct; }
+  if (st) { var el = document.getElementById('liveStart');    if (el) el.value = st; }
+  if (en) { var el = document.getElementById('liveEnd');      if (el) el.value = en; }
   sessionStorage.removeItem('lf_crypto');
   sessionStorage.removeItem('lf_interval');
   sessionStorage.removeItem('lf_count');
+  sessionStorage.removeItem('lf_start');
+  sessionStorage.removeItem('lf_end');
   sessionStorage.removeItem('lf_goto_sim');
   if (goSim) {
     var simBtn = document.querySelector('[data-bs-target="#tabSim"]');
@@ -1673,16 +1696,28 @@ function confirmDelete() {
 }
 
 // ─── Live fetch from dashboard ─────────────────────────────────────────────
+function clearDateRange() {
+  document.getElementById('liveStart').value = '';
+  document.getElementById('liveEnd').value = '';
+}
+
 function startLiveFetch() {
   var crypto   = document.getElementById('liveCrypto').value;
   var interval = document.getElementById('liveInterval').value;
   var count    = parseInt(document.getElementById('liveCount').value) || 200;
+  var startVal = document.getElementById('liveStart').value;
+  var endVal   = document.getElementById('liveEnd').value;
   var coinLabel = document.getElementById('liveCrypto').options[document.getElementById('liveCrypto').selectedIndex].text.split('–')[0].trim();
+
+  if (startVal && endVal && startVal >= endVal) {
+    alert('Start date/time must be earlier than End date/time.');
+    return;
+  }
 
   // Show overlay
   document.getElementById('progressTitle').textContent = 'Fetching ' + coinLabel + ' ' + interval.toUpperCase() + ' markets';
   document.getElementById('progressFetched').textContent = '0';
-  document.getElementById('progressTotal').textContent = count;
+  document.getElementById('progressTotal').textContent = (startVal || endVal) ? '—' : count;
   document.getElementById('progressFill').style.width = '0%';
   document.getElementById('progressStatus').textContent = 'Connecting to Polymarket API…';
   document.getElementById('loadingOverlay').style.display = 'flex';
@@ -1692,6 +1727,8 @@ function startLiveFetch() {
   fd.append('crypto', crypto);
   fd.append('interval', interval);
   fd.append('count', count);
+  if (startVal) fd.append('start', startVal);
+  if (endVal)   fd.append('end', endVal);
 
   fetch('/fetch', { method: 'POST', body: fd })
     .then(function(r) { return r.json(); })
@@ -1722,6 +1759,8 @@ function pollLiveJob(jobId, total) {
           sessionStorage.setItem('lf_crypto',   document.getElementById('liveCrypto').value);
           sessionStorage.setItem('lf_interval', document.getElementById('liveInterval').value);
           sessionStorage.setItem('lf_count',    document.getElementById('liveCount').value);
+          sessionStorage.setItem('lf_start',    document.getElementById('liveStart').value);
+          sessionStorage.setItem('lf_end',      document.getElementById('liveEnd').value);
           sessionStorage.setItem('lf_goto_sim', '1');
           window.location.href = '/fetch-result/' + jobId;
         } else if (data.status === 'error') {
