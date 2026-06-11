@@ -356,25 +356,32 @@
               <div style="border:1px solid #21262d;border-radius:10px;padding:12px 14px;background:#0d1117">
                 <label class="form-label d-block" style="margin-bottom:8px">
                   Streak Entry / Exit
-                  <span style="font-weight:400;text-transform:none">(stay idle until a streak, then bet until N wins)</span>
+                  <span style="font-weight:400;text-transform:none">(stay idle until a pattern matches, then bet until N wins)</span>
                 </label>
                 <div class="row g-3 align-items-end">
-                  <div class="col-auto">
-                    <label class="form-label d-block" style="font-size:.72rem">Start after streak — Up</label>
-                    <input class="form-control" type="number" id="streakUpIn" value="0" min="0" max="50" step="1" style="width:130px">
-                  </div>
-                  <div class="col-auto">
-                    <label class="form-label d-block" style="font-size:.72rem">Start after streak — Down</label>
-                    <input class="form-control" type="number" id="streakDownIn" value="0" min="0" max="50" step="1" style="width:130px">
+                  <div class="col-auto" style="min-width:280px">
+                    <label class="form-label d-block" style="font-size:.72rem">Entry Pattern (Up / Down / any sequence)</label>
+                    <input class="form-control" type="text" id="streakPatternIn" value="" placeholder="e.g. Down Down Down or Up any Down" style="width:100%">
                   </div>
                   <div class="col-auto">
                     <label class="form-label d-block" style="font-size:.72rem">Stop after wins</label>
                     <input class="form-control" type="number" id="stopWinsIn" value="1" min="1" max="50" step="1" style="width:130px">
                   </div>
+                  <div class="col-auto" style="padding-top:1.4rem">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="streakAllMenIn">
+                      <label class="form-check-label" for="streakAllMenIn" style="font-size:.72rem;color:#c9d1d9;white-space:nowrap">
+                        Activate all men on pattern match
+                      </label>
+                    </div>
+                  </div>
                   <div class="col">
                     <div style="font-size:.72rem;color:#8b949e">
-                      0 = disabled. e.g. Down&nbsp;=&nbsp;3 &rarr; wait for 3 straight Down results, then bet until
-                      <em>Stop after wins</em> wins, then wait for the next streak. Up &amp; Down are both watched &bull; either one triggers entry.
+                      Leave blank to disable. Enter a space-separated sequence of <strong>Up</strong>, <strong>Down</strong>, or <strong>any</strong>.
+                      e.g. <em>Down Down Down</em> &rarr; wait for 3 straight Downs &bull;
+                      <em>Up any Down</em> &rarr; Up, then anything, then Down.
+                      Bets until <em>Stop after wins</em> wins, then resets.
+                      <em>Unchecked (default)</em>: only the man whose candle completed the pattern activates.
                     </div>
                   </div>
                 </div>
@@ -686,25 +693,30 @@ function fmtMDs(mds) { mds = mds || [0,0]; return 'MD1 ' + fmtMD(mds[0]) + ' · 
 // (both thresholds 0) the session is active from the start = old behaviour.
 // ─────────────────────────────────────────────────────────────────
 function gateCfg(gate) {
-  var up   = (gate && gate.up   > 0) ? gate.up   : 0;
-  var down = (gate && gate.down > 0) ? gate.down : 0;
-  var sw   = (gate && gate.stopWins > 0) ? gate.stopWins : 1;
-  return { on: (up > 0 || down > 0), upT: up, downT: down, stopWins: sw };
+  var pat = (gate && Array.isArray(gate.pattern) && gate.pattern.length > 0) ? gate.pattern : [];
+  var sw  = (gate && gate.stopWins > 0) ? gate.stopWins : 1;
+  return { on: pat.length > 0, pattern: pat, stopWins: sw };
 }
 // Fresh per-session state. active starts true only when the gate is off.
-function gateState(g) { return { active: !g.on, upRun: 0, downRun: 0, wins: 0 }; }
+function gateState(g) { return { active: !g.on, patPos: 0, wins: 0 }; }
 
-// Run for every candle while IDLE. Builds the streak from this candle's
-// result and flips to ACTIVE (effective on the NEXT candle) once a
-// threshold is met. Returns true whenever the candle should be skipped —
-// the streak-confirming candle is never bet, it only confirms the streak.
+// Run for every candle while IDLE. Advances the pattern position on each
+// matching candle. Resets on mismatch (with overlap check for pattern[0]).
+// Flips to ACTIVE once the full pattern is matched. Returns true whenever
+// the candle should be skipped — the pattern-completing candle is never bet.
 function gateIdle(g, st, actual) {
   if (!g.on || st.active) return false;
-  if (actual === 'Up') { st.upRun++; st.downRun = 0; }
-  else                 { st.downRun++; st.upRun = 0; }
-  if ((g.upT   > 0 && st.upRun   >= g.upT) ||
-      (g.downT > 0 && st.downRun >= g.downT)) {
-    st.active = true; st.wins = 0;
+  var tok = g.pattern[st.patPos];
+  if (tok === 'any' || tok === actual) {
+    st.patPos++;
+  } else {
+    // mismatch: reset, then check if current result starts a new match
+    st.patPos = 0;
+    var tok0 = g.pattern[0];
+    if (tok0 === 'any' || tok0 === actual) st.patPos = 1;
+  }
+  if (st.patPos >= g.pattern.length) {
+    st.active = true; st.wins = 0; st.patPos = 0;
   }
   return true;
 }
@@ -714,7 +726,7 @@ function gateIdle(g, st, actual) {
 function gateWin(g, st) {
   if (!g.on || !st.active) return false;
   st.wins++;
-  if (st.wins >= g.stopWins) { st.active = false; st.upRun = 0; st.downRun = 0; return true; }
+  if (st.wins >= g.stopWins) { st.active = false; st.patPos = 0; return true; }
   return false;
 }
 
@@ -998,8 +1010,31 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
     for (var ri = 0; ri < ROWS.length; ri++) {
       var actual = ROWS[ri].cells[di];
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
-      allEvents.push({ time: ROWS[ri].time, di: di, actual: actual, gprev: lastActual });
+      allEvents.push({ time: ROWS[ri].time, di: di, actual: actual, gprev: lastActual, idx: allEvents.length });
       lastActual = actual;
+    }
+  }
+
+  // Pre-compute global activation points: indices in allEvents where the
+  // entry pattern completes, tagged with which man owns that candle.
+  // Only the man whose turn it was when the pattern fired gets to activate.
+  var activePts = [];
+  if (g.on) {
+    var _gPre = { patPos: 0 };
+    for (var i = 0; i < allEvents.length; i++) {
+      var _tok = g.pattern[_gPre.patPos];
+      var _act = allEvents[i].actual;
+      if (_tok === 'any' || _tok === _act) {
+        _gPre.patPos++;
+      } else {
+        _gPre.patPos = 0;
+        var _tok0 = g.pattern[0];
+        if (_tok0 === 'any' || _tok0 === _act) _gPre.patPos = 1;
+      }
+      if (_gPre.patPos >= g.pattern.length) {
+        activePts.push({ idx: i, man: i % numMen }); // tagged to the owning man
+        _gPre.patPos = 0;   // re-arm immediately for next pattern
+      }
     }
   }
 
@@ -1008,10 +1043,16 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
   for (var m = 0; m < numMen; m++) manEvents.push([]);
   for (var i = 0; i < allEvents.length; i++) manEvents[i % numMen].push(allEvents[i]);
 
-  // Simulate each man independently
+  // Simulate each man independently.
+  // Gate: each man tracks which activation point they are waiting for (activePtIdx).
+  // A man becomes active on their first event AFTER activePts[activePtIdx].
+  // The pattern-completing candle itself is skipped (idx > activePts[n], not >=).
+  // Each man independently counts wins and goes back to idle after stopWins.
   for (var m = 0; m < numMen; m++) {
     var step       = 0, prevRes = null, cdLeft = 0, patternPos = 0;
-    var gst        = gateState(g);  // streak gate state per man
+    var manActive  = !g.on;   // true from the start when gate is off
+    var manWins    = 0;
+    var activePtIdx = 0;      // index into activePts for the next trigger
     var events = manEvents[m];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
@@ -1021,10 +1062,18 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         if (!prevRes) { prevRes = actual; continue; }
       }
 
-      if (gateIdle(g, gst, actual)) {
-        overlaysMap[ev.time][ev.di] = { skipped: true, idle: true, man: m + 1 };
-        prevRes = actual;
-        continue;
+      // Gate: if idle, find the next activation point that belongs to this man,
+      // then check whether the current event is past it (strictly after).
+      if (g.on && !manActive) {
+        while (activePtIdx < activePts.length && activePts[activePtIdx].man !== m) activePtIdx++;
+        if (activePtIdx < activePts.length && ev.idx > activePts[activePtIdx].idx) {
+          manActive = true; manWins = 0; activePtIdx++;
+        }
+        if (!manActive) {
+          overlaysMap[ev.time][ev.di] = { skipped: true, idle: true, man: m + 1 };
+          prevRes = actual;
+          continue;
+        }
       }
 
       if (cdLeft > 0) {
@@ -1058,7 +1107,11 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         slotMap[ev.time].wins++;
         step = 0;
         cdLeft = cooldown;
-        if (gateWin(g, gst)) cdLeft = 0;  // win quota hit → go idle, drop cooldown
+        // Gate win counting: each man independently exits after stopWins
+        if (g.on && manActive) {
+          manWins++;
+          if (manWins >= g.stopWins) { manActive = false; cdLeft = 0; }
+        }
         if (strategy === 'custom') {
           patternPos = customResetPattern ? 0 : patternPos + 1;
         } else {
@@ -1233,13 +1286,21 @@ function runAllSims() {
   if (isNaN(cooldown) || cooldown < 0) cooldown = 0;
 
   // Streak entry/exit gate
-  var streakUp   = parseInt(document.getElementById('streakUpIn').value, 10);
-  if (isNaN(streakUp)   || streakUp   < 0) streakUp = 0;
-  var streakDown = parseInt(document.getElementById('streakDownIn').value, 10);
-  if (isNaN(streakDown) || streakDown < 0) streakDown = 0;
+  var streakPatternRaw = document.getElementById('streakPatternIn').value.trim();
+  var streakPattern = [];
+  if (streakPatternRaw) {
+    var _toks = streakPatternRaw.split(/[\s,]+/);
+    for (var _ti = 0; _ti < _toks.length; _ti++) {
+      var _t = _toks[_ti].toLowerCase();
+      if (_t === 'up') streakPattern.push('Up');
+      else if (_t === 'down') streakPattern.push('Down');
+      else if (_t === 'any') streakPattern.push('any');
+    }
+  }
   var stopWins   = parseInt(document.getElementById('stopWinsIn').value, 10);
   if (isNaN(stopWins)   || stopWins   < 1) stopWins = 1;
-  var gate = { up: streakUp, down: streakDown, stopWins: stopWins };
+  var streakAllMen = document.getElementById('streakAllMenIn').checked;
+  var gate = { pattern: streakPattern, stopWins: stopWins, allMen: streakAllMen };
 
   var mode = document.querySelector('input[name="simMode"]:checked').value;
   var customPattern = parseCustomPattern();
@@ -1910,8 +1971,7 @@ function saveSnapshot() {
   var mode = document.querySelector('input[name="simMode"]:checked').value;
   var cooldown = parseInt(document.getElementById('cooldownIn').value, 10) || 0;
   var numMen = mode === 'menbased' ? (parseInt(document.getElementById('menCount').value, 10) || 2) : null;
-  var streakUp   = parseInt(document.getElementById('streakUpIn').value, 10)   || 0;
-  var streakDown = parseInt(document.getElementById('streakDownIn').value, 10) || 0;
+  var streakPatternSnap = document.getElementById('streakPatternIn').value.trim();
   var stopWins   = parseInt(document.getElementById('stopWinsIn').value, 10)   || 1;
   var label = '{{ filename }}';
   var entry = {
@@ -1919,8 +1979,7 @@ function saveSnapshot() {
     mode: mode,
     numMen: numMen,
     cooldown: cooldown,
-    streakUp: streakUp,
-    streakDown: streakDown,
+    streakPattern: streakPatternSnap,
     stopWins: stopWins,
     ladder: currentLadder,
     buyingPrice: currentBuyingPrice,
@@ -1989,7 +2048,8 @@ function refreshCompareTab() {
                + ' &bull; Ladder: ' + (e.ladder || []).join(', ')
                + ' &bull; Price: $' + (e.buyingPrice || 0).toFixed(2);
     if (e.cooldown) params += ' &bull; CD: ' + e.cooldown;
-    if (e.streakUp || e.streakDown) params += ' &bull; Streak U/D: ' + (e.streakUp || 0) + '/' + (e.streakDown || 0) + ' &bull; Stop@W: ' + (e.stopWins || 1);
+    if (e.streakPattern) params += ' &bull; Pattern: ' + e.streakPattern + ' &bull; Stop@W: ' + (e.stopWins || 1);
+    else if (e.streakUp || e.streakDown) params += ' &bull; Streak U/D: ' + (e.streakUp || 0) + '/' + (e.streakDown || 0) + ' &bull; Stop@W: ' + (e.stopWins || 1);
     html += '<th style="min-width:200px;vertical-align:top">'
           + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">'
           + '<div style="text-align:left">'
