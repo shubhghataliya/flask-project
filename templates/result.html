@@ -322,7 +322,7 @@
             <!-- Ladder -->
             <div class="col-md-3">
               <label class="form-label d-block">Ladder <span style="font-weight:400;text-transform:none">(comma-separated units)</span></label>
-              <input class="form-control" id="ladderIn" value="0.01, 0.01, 0.01, 1, 2, 5, 14">
+              <input class="form-control" id="ladderIn" value="0.01, 0.01, 0.01, 1, 3, 7, 15">
               <div class="mt-1" style="font-size:.72rem;color:#8b949e">
                 Win → reset to step 1 &bull; Lose → advance step &bull; Bust on last step → reset
               </div>
@@ -695,7 +695,23 @@ function fmtMDs(mds) { mds = mds || [0,0]; return 'MD1 ' + fmtMD(mds[0]) + ' · 
 function gateCfg(gate) {
   var pat = (gate && Array.isArray(gate.pattern) && gate.pattern.length > 0) ? gate.pattern : [];
   var sw  = (gate && gate.stopWins > 0) ? gate.stopWins : 1;
-  return { on: pat.length > 0, pattern: pat, stopWins: sw };
+  var all = !!(gate && gate.allMen);
+  return { on: pat.length > 0, pattern: pat, stopWins: sw, allMen: all };
+}
+// KMP-style: how many tokens of the pattern are already matched after a full
+// match (longest proper prefix that equals the suffix, strict token equality).
+// 'any' is treated as a literal here — wildcards only apply when matching
+// actual candle results, not when comparing pattern tokens to each other.
+function patternOverlap(pat) {
+  var n = pat.length;
+  for (var k = n - 1; k >= 1; k--) {
+    var ok = true;
+    for (var j = 0; j < k; j++) {
+      if (pat[n - k + j] !== pat[j]) { ok = false; break; }
+    }
+    if (ok) return k;
+  }
+  return 0;
 }
 // Fresh per-session state. active starts true only when the gate is off.
 function gateState(g) { return { active: !g.on, patPos: 0, wins: 0 }; }
@@ -1016,10 +1032,19 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
   }
 
   // Pre-compute global activation points: indices in allEvents where the
-  // entry pattern completes, tagged with which man owns that candle.
-  // Only the man whose turn it was when the pattern fired gets to activate.
+  // entry pattern completes.
+  //
+  // "Owner only" (allMen=false): uses KMP overlapping re-arm so consecutive
+  //   results can fire the pattern on successive candles, letting each man
+  //   catch their own overlapping match. Activation tagged to the owning man.
+  //   e.g. Up Up Up fires at #5 (M1) and again at #6 if it's also Up (M2).
+  //
+  // "All men" (allMen=true): hard reset after each match so each firing is
+  //   distinct. All men activate from the same firing with a +numMen offset
+  //   so no man bets on the candle immediately after the pattern. Tagged -1.
   var activePts = [];
   if (g.on) {
+    var _overlap = g.allMen ? 0 : patternOverlap(g.pattern);
     var _gPre = { patPos: 0 };
     for (var i = 0; i < allEvents.length; i++) {
       var _tok = g.pattern[_gPre.patPos];
@@ -1032,8 +1057,8 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         if (_tok0 === 'any' || _tok0 === _act) _gPre.patPos = 1;
       }
       if (_gPre.patPos >= g.pattern.length) {
-        activePts.push({ idx: i, man: i % numMen }); // tagged to the owning man
-        _gPre.patPos = 0;   // re-arm immediately for next pattern
+        activePts.push({ idx: i, man: g.allMen ? -1 : i % numMen });
+        _gPre.patPos = _overlap; // overlapping for owner mode, 0 for all-men
       }
     }
   }
@@ -1062,12 +1087,24 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         if (!prevRes) { prevRes = actual; continue; }
       }
 
-      // Gate: if idle, find the next activation point that belongs to this man,
-      // then check whether the current event is past it (strictly after).
+      // Gate: check whether this man should become active.
+      //
+      // "All men" mode: any activation point triggers all men. Men start
+      //   betting once their event index >= activation index + numMen, which
+      //   skips the completing candle AND the candle immediately after for all.
+      //
+      // "Owner only" mode (overlapping pre-pass): skip activations for other
+      //   men; only respond to the one tagged to this man (ev.idx > ap.idx).
       if (g.on && !manActive) {
-        while (activePtIdx < activePts.length && activePts[activePtIdx].man !== m) activePtIdx++;
-        if (activePtIdx < activePts.length && ev.idx > activePts[activePtIdx].idx) {
-          manActive = true; manWins = 0; activePtIdx++;
+        if (g.allMen) {
+          if (activePtIdx < activePts.length && ev.idx >= activePts[activePtIdx].idx + numMen) {
+            manActive = true; manWins = 0; activePtIdx++;
+          }
+        } else {
+          while (activePtIdx < activePts.length && activePts[activePtIdx].man !== m) activePtIdx++;
+          if (activePtIdx < activePts.length && ev.idx > activePts[activePtIdx].idx) {
+            manActive = true; manWins = 0; activePtIdx++;
+          }
         }
         if (!manActive) {
           overlaysMap[ev.time][ev.di] = { skipped: true, idle: true, man: m + 1 };
