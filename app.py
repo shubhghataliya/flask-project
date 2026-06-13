@@ -6,6 +6,7 @@ import json
 import time
 import threading
 import uuid
+import sqlite3
 import requests as req
 from io import StringIO
 from datetime import datetime
@@ -16,6 +17,77 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# ── Saved-test history database ───────────────────────────────────────────────
+# A single SQLite file holds every test a user explicitly saves from the
+# Martingale Sim analytics panel: the strategy, the parameters used, the
+# headline results and a free-text note ("what was in mind when testing").
+DB_PATH = os.path.join(os.path.dirname(__file__), 'results.db')
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    try:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS saved_tests (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at     TEXT NOT NULL,
+                file_label     TEXT,
+                timeframe      TEXT,
+                strategy       TEXT,
+                strategy_label TEXT,
+                mode           TEXT,
+                num_men        INTEGER,
+                ladder         TEXT,
+                buying_price   REAL,
+                cooldown       INTEGER,
+                streak_pattern TEXT,
+                stop_wins      INTEGER,
+                streak_all_men INTEGER,
+                custom_pattern TEXT,
+                pnl            REAL,
+                bets           INTEGER,
+                wins           INTEGER,
+                busts          INTEGER,
+                md1            REAL,
+                md2            REAL,
+                note           TEXT,
+                data_json      TEXT
+            )
+        ''')
+        # Migrate older databases: add any columns introduced after first run.
+        have = {r[1] for r in conn.execute('PRAGMA table_info(saved_tests)')}
+        for col, decl in (('streak_pattern', 'TEXT'),
+                          ('stop_wins', 'INTEGER'),
+                          ('streak_all_men', 'INTEGER')):
+            if col not in have:
+                conn.execute('ALTER TABLE saved_tests ADD COLUMN %s %s' % (col, decl))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _as_int(v, default=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(v, default=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+init_db()
 
 MONTHS = {
     'january': 1, 'february': 2, 'march': 3, 'april': 4,
@@ -491,6 +563,92 @@ def delete_file(filename):
     if os.path.exists(path):
         os.remove(path)
     return redirect('/')
+
+
+# ── Saved-test history endpoints ──────────────────────────────────────────────
+@app.route('/save-test', methods=['POST'])
+def save_test():
+    """Persist one tested strategy + its parameters, results and note."""
+    data = request.get_json(silent=True) or {}
+    if not data.get('strategy'):
+        return jsonify({'error': 'Missing strategy.'}), 400
+
+    num_men = data.get('num_men')
+    num_men = _as_int(num_men, None) if num_men not in (None, '') else None
+
+    row = (
+        datetime.now().strftime('%Y-%m-%d %H:%M'),
+        (data.get('file_label') or '').strip() or 'Untitled',
+        data.get('timeframe') or '',
+        data.get('strategy') or '',
+        data.get('strategy_label') or '',
+        data.get('mode') or '',
+        num_men,
+        data.get('ladder') or '',
+        _as_float(data.get('buying_price')),
+        _as_int(data.get('cooldown')),
+        data.get('streak_pattern') or '',
+        _as_int(data.get('stop_wins'), 1),
+        1 if data.get('streak_all_men') else 0,
+        data.get('custom_pattern') or '',
+        _as_float(data.get('pnl')),
+        _as_int(data.get('bets')),
+        _as_int(data.get('wins')),
+        _as_int(data.get('busts')),
+        _as_float(data.get('md1')),
+        _as_float(data.get('md2')),
+        (data.get('note') or '').strip(),
+        json.dumps(data),
+    )
+
+    conn = get_db()
+    try:
+        cur = conn.execute('''
+            INSERT INTO saved_tests
+                (created_at, file_label, timeframe, strategy, strategy_label, mode,
+                 num_men, ladder, buying_price, cooldown, streak_pattern, stop_wins,
+                 streak_all_men, custom_pattern, pnl, bets, wins, busts, md1, md2, note, data_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ''', row)
+        conn.commit()
+        new_id = cur.lastrowid
+    finally:
+        conn.close()
+    return jsonify({'ok': True, 'id': new_id})
+
+
+@app.route('/api/history')
+def api_history():
+    """Return every saved test, newest first."""
+    conn = get_db()
+    try:
+        rows = conn.execute('SELECT * FROM saved_tests ORDER BY id DESC').fetchall()
+    finally:
+        conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/history/<int:test_id>/delete', methods=['POST'])
+def api_history_delete(test_id):
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM saved_tests WHERE id = ?', (test_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/history/clear', methods=['POST'])
+def api_history_clear():
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM saved_tests')
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'ok': True})
+
 
 if __name__ == '__main__':
     app.run(debug=True)

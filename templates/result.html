@@ -252,6 +252,7 @@
     <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabPivot" type="button">Pivot Table</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabSim" type="button">Martingale Sim</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabCompare" type="button" id="compareTabBtn">Compare <span id="compareCount" style="background:#1f6feb;color:#fff;border-radius:99px;padding:1px 7px;font-size:.7rem;margin-left:4px;display:none">0</span></button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabHistory" type="button" id="historyTabBtn">Saved Tests <span id="historyCount" style="background:#238636;color:#fff;border-radius:99px;padding:1px 7px;font-size:.7rem;margin-left:4px;display:none">0</span></button></li>
   </ul>
 
   <div class="tab-content">
@@ -421,6 +422,7 @@
               <span class="strat-badge" id="detailBadge"></span>
               <span style="font-size:.82rem;color:#8b949e" id="detailDesc"></span>
               <button onclick="saveSnapshot()" id="saveSnapBtn" style="margin-left:auto;background:#1a4731;border:1px solid #238636;color:#3fb950;border-radius:8px;padding:5px 14px;font-size:.78rem;font-weight:600;cursor:pointer">+ Save to Compare</button>
+              <button onclick="openSaveDbModal()" id="saveDbBtn" style="background:#172a4d;border:1px solid #1f6feb;color:#58a6ff;border-radius:8px;padding:5px 14px;font-size:.78rem;font-weight:600;cursor:pointer">+ Save to DB</button>
             </div>
             <div class="row g-3" id="detailCards"></div>
           </div>
@@ -494,6 +496,37 @@
       </div>
     </div>
 
+    <!-- ── SAVED TESTS (DATABASE HISTORY) ── -->
+    <div class="tab-pane fade" id="tabHistory">
+      <div class="pt-3">
+        <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+          <div style="font-size:.72rem;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;font-weight:700">
+            Saved Tests — run a sim, open a strategy and click <strong style="color:#58a6ff">+ Save to DB</strong>
+          </div>
+          <button onclick="clearHistory()" style="background:#4a1515;border:1px solid #da3633;color:#f85149;border-radius:8px;padding:5px 14px;font-size:.78rem;cursor:pointer">Clear All</button>
+        </div>
+        <div id="historyBody">
+          <div style="color:#484f58;font-size:.85rem;padding:40px 0;text-align:center">No saved tests yet.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Save-to-DB note modal ── -->
+<div id="dbNoteModal" style="display:none;position:fixed;inset:0;background:rgba(1,4,9,.7);z-index:1080;align-items:center;justify-content:center;padding:16px">
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;max-width:480px;width:100%;padding:20px;box-shadow:0 16px 48px rgba(0,0,0,.5)">
+    <div style="font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:4px">Save test to database</div>
+    <div style="font-size:.8rem;color:#8b949e;margin-bottom:14px">
+      Saving <strong id="dbNoteModalStrat" style="color:#58a6ff">strategy</strong> with the parameters currently selected.
+    </div>
+    <label class="form-label d-block" style="font-size:.74rem;color:#8b949e">Note <span style="font-weight:400">(what were you testing / what's the idea?)</span></label>
+    <textarea id="dbNoteInput" class="form-control" rows="4" placeholder="e.g. Testing 3-down streak entry with 2-win exit on BTC 15m…" style="resize:vertical"></textarea>
+    <div class="d-flex justify-content-end gap-2" style="margin-top:16px">
+      <button onclick="closeSaveDbModal()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:8px;padding:6px 16px;font-size:.82rem;cursor:pointer">Cancel</button>
+      <button onclick="confirmSaveDb()" id="dbNoteSaveBtn" style="background:#1a4731;border:1px solid #238636;color:#3fb950;border-radius:8px;padding:6px 16px;font-size:.82rem;font-weight:600;cursor:pointer">Save</button>
+    </div>
   </div>
 </div>
 
@@ -1376,13 +1409,35 @@ function runAllSims() {
   document.getElementById('stratCompare').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// ─── Martingale recovery rate ───
+// In a martingale, the meaningful unit is a SEQUENCE: the run of bets from a
+// fresh step-1 start until it either wins (resets the ladder) or busts (blows
+// through every rung). Because each win resets the ladder, winning sequences =
+// win count and blown sequences = bust count. Recovery rate is the share of
+// sequences that recover instead of busting — the number that actually matters
+// for a martingale, unlike the per-bet win rate.
+//   recovery = wins / (wins + busts) ; bust rate = busts / (wins + busts)
+// Returns formatted strings + a colour class for the recovery figure.
+function recovRate(wins, busts) {
+  var cyc = (wins || 0) + (busts || 0);
+  var rate = cyc > 0 ? (wins / cyc * 100) : 0;
+  var bust = cyc > 0 ? (busts / cyc * 100) : 0;
+  return {
+    num:      rate,
+    rate:     cyc > 0 ? rate.toFixed(1) : '—',
+    bustRate: cyc > 0 ? bust.toFixed(1) : '—',
+    cycles:   cyc,
+    cls:      cyc === 0 ? 'neu' : rate >= 95 ? 'pos' : rate >= 85 ? 'neu' : 'neg'
+  };
+}
+
 // ─── Overview cards ───
 function renderStratCards() {
   var html = '';
   for (var i = 0; i < STRATS.length; i++) {
     var s    = STRATS[i];
     var r    = allSimResults[s];
-    var wr   = r.grandBets > 0 ? (r.grandWins / r.grandBets * 100).toFixed(1) : '0.0';
+    var rec  = recovRate(r.grandWins, r.grandBusts);   // martingale sequence recovery rate
     var pnlS = (r.grandPnl >= 0 ? '+$' : '-$') + Math.abs(r.grandPnl).toFixed(2);
     var pnlC = r.grandPnl > 0 ? 'pos' : r.grandPnl < 0 ? 'neg' : 'neu';
     var buC  = r.grandBusts > 0 ? 'neg' : 'pos';
@@ -1395,7 +1450,8 @@ function renderStratCards() {
           + '<div class="strat-desc">' + STRAT_DESCS[s] + '</div>'
           + '<div class="strat-pnl ' + pnlC + '">' + pnlS + '</div>'
           + '<div class="strat-meta">'
-          + '<span>Win <strong>' + wr + '%</strong></span>'
+          + '<span class="' + rec.cls + '">Recov <strong>' + rec.rate + '%</strong></span>'
+          + '<span class="' + buC + '">Bust <strong>' + rec.bustRate + '%</strong></span>'
           + '<span>Bets <strong>' + r.grandBets + '</strong></span>'
           + '<span class="' + buC + '">Busts <strong>' + r.grandBusts + '</strong></span>'
           + '<span class="neg">MD1 <strong>' + fmtMD(md1) + '</strong></span>'
@@ -1446,7 +1502,7 @@ function showAnalytics(strat, noScroll) {
 // ─── Stat cards ───
 function renderDetailCards(pnl, busts, bets, wins, ladder, mds) {
   mds = mds || [0, 0];
-  var wr  = bets > 0 ? (wins / bets * 100).toFixed(1) : '0.0';
+  var rec = recovRate(wins, busts);          // sequence recovery / bust rate
   var mr  = ladder.reduce(function(a, b) { return a + b; }, 0).toFixed(2);
   var pS  = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
   var pC  = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neu';
@@ -1454,12 +1510,12 @@ function renderDetailCards(pnl, busts, bets, wins, ladder, mds) {
   var md2C = (mds[1] || 0) > 0 ? 'neg' : 'neu';
   var priceLabel = 'Buy @ $' + currentBuyingPrice.toFixed(2) + ' · Max risk: $' + mr;
   document.getElementById('detailCards').innerHTML =
-    dc(pS,                      'Total PnL ($)',                  pC) +
-    dc(busts,                   'Total Busts',                    busts > 0 ? 'neg' : 'pos') +
-    dc(wr + '%',                'Win Rate (' + wins + '/' + bets + ')', parseFloat(wr) >= 50 ? 'pos' : 'neg') +
-    dc(fmtMD(mds[0]),           'MD1 — Deepest Drawdown',         md1C) +
-    dc(fmtMD(mds[1]),           'MD2 — 2nd Deepest Drawdown',     md2C) +
-    dc(ladder.length + ' steps', priceLabel,                      'neu');
+    dc(pS,                      'Total PnL ($)',                                       pC) +
+    dc(busts + ' (' + rec.bustRate + '%)', 'Busts — sequences blown',                  busts > 0 ? 'neg' : 'pos') +
+    dc(rec.rate + '%',          'Recovery Rate (' + wins + '/' + rec.cycles + ' seq)', rec.cls) +
+    dc(fmtMD(mds[0]),           'MD1 — Deepest Drawdown',                              md1C) +
+    dc(fmtMD(mds[1]),           'MD2 — 2nd Deepest Drawdown',                          md2C) +
+    dc(ladder.length + ' steps', priceLabel,                                          'neu');
 }
 function dc(v, l, c) {
   return '<div class="col-6 col-md-3"><div class="stat-card"><div class="stat-val ' + c + '">' + v + '</div><div class="stat-lbl">' + l + '</div></div></div>';
@@ -1566,13 +1622,13 @@ function renderSlotTable(sr, ladder) {
   for (var i = 0; i < ladder.length; i++)
     sh += '<th>Step ' + (i + 1) + '<br><small style="font-weight:400;color:#555">(' + ladder[i] + 'u)</small></th>';
 
-  var html = '<thead><tr><th style="text-align:left">Time Slot</th><th>Bets</th><th>Wins</th><th>Win%</th><th>PnL</th><th>Busts</th>' + sh + '</tr></thead><tbody>';
+  var html = '<thead><tr><th style="text-align:left">Time Slot</th><th>Bets</th><th>Wins</th><th>Recov%</th><th>PnL</th><th>Busts</th>' + sh + '</tr></thead><tbody>';
   var tB = 0, tW = 0, tP = 0, tBu = 0, tS = [];
   for (var i = 0; i < ladder.length; i++) tS.push(0);
 
   for (var i = 0; i < sr.length; i++) {
     var s  = sr[i];
-    var wr = s.total > 0 ? (s.wins / s.total * 100).toFixed(1) + '%' : '—';
+    var wr = recovRate(s.wins, s.busts).rate; wr = wr === '—' ? '—' : wr + '%';
     var pc = s.pnl > 0 ? 'pos' : s.pnl < 0 ? 'neg' : 'neu';
     var ps = (s.pnl >= 0 ? '+$' : '-$') + Math.abs(s.pnl).toFixed(2);
     var bc = s.busts > 0 ? 'neg' : 'pos';
@@ -1584,7 +1640,7 @@ function renderSlotTable(sr, ladder) {
     tB += s.total; tW += s.wins; tP += s.pnl; tBu += s.busts;
   }
 
-  var tWr = tB > 0 ? (tW / tB * 100).toFixed(1) + '%' : '—';
+  var tWr = recovRate(tW, tBu).rate; tWr = tWr === '—' ? '—' : tWr + '%';
   var tPc = tP > 0 ? 'pos' : tP < 0 ? 'neg' : 'neu';
   var tPs = (tP >= 0 ? '+$' : '-$') + Math.abs(tP).toFixed(2);
   var tBc = tBu > 0 ? 'neg' : 'pos';
@@ -1749,11 +1805,11 @@ function renderIstSection(slotResults, overlaysMap, bandMDs, dowMDs) {
   var html = '';
   for (var b = 0; b < 4; b++) {
     var bd = bands[b];
-    var wr    = bd.total > 0 ? (bd.wins / bd.total * 100).toFixed(2) + '%' : '0%';
-    var wrNum = bd.total > 0 ? bd.wins / bd.total * 100 : 0;
+    var rec   = recovRate(bd.wins, bd.busts);
+    var wr    = rec.cycles > 0 ? rec.rate + '%' : '—';
     var pnlS  = (bd.pnl >= 0 ? '+$' : '-$') + Math.abs(bd.pnl).toFixed(2);
     var pnlC  = bd.pnl >= 0 ? 'pos' : 'neg';
-    var wrC   = wrNum >= 50 ? 'pos' : 'neg';
+    var wrC   = rec.cls;
     var buC   = bd.busts > 0 ? 'neg' : 'pos';
     var bMd   = bandMDs[b] || [0,0];
     var md1C  = (bMd[0] || 0) > 0 ? 'neg' : 'neu';
@@ -1763,7 +1819,7 @@ function renderIstSection(slotResults, overlaysMap, bandMDs, dowMDs) {
           + '<div class="ist-band-label">' + IST_BANDS[b].label + '</div>'
           + '<div class="ist-pnl ' + pnlC + '">' + pnlS + '</div>'
           + '<div class="ist-meta">'
-          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Win Rate</span><span class="ist-meta-val ' + wrC + '">' + wr + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Recovery</span><span class="ist-meta-val ' + wrC + '">' + wr + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Trades</span><span class="ist-meta-val">' + bd.total + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">W / L</span><span class="ist-meta-val">' + bd.wins + ' / ' + bd.losses + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + bd.busts + '</span></div>'
@@ -1866,11 +1922,11 @@ function renderDowPnlChart(overlaysMap, dowMDs) {
   var html = '';
   for (var d = 0; d < 7; d++) {
     var ds    = dayStats[d];
-    var wr    = ds.total > 0 ? (ds.wins / ds.total * 100).toFixed(2) + '%' : '0%';
-    var wrNum = ds.total > 0 ? ds.wins / ds.total * 100 : 0;
+    var rec   = recovRate(ds.wins, ds.busts);
+    var wr    = rec.cycles > 0 ? rec.rate + '%' : '—';
     var pnlS  = (ds.pnl >= 0 ? '+$' : '-$') + Math.abs(ds.pnl).toFixed(2);
     var pnlC  = ds.pnl >= 0 ? 'pos' : 'neg';
-    var wrC   = wrNum >= 50 ? 'pos' : 'neg';
+    var wrC   = rec.cls;
     var buC   = ds.busts > 0 ? 'neg' : 'pos';
     var dMd   = dowMDs[d] || [0,0];
     var md1C  = (dMd[0] || 0) > 0 ? 'neg' : 'neu';
@@ -1880,7 +1936,7 @@ function renderDowPnlChart(overlaysMap, dowMDs) {
           + '<div class="ist-band-label">' + dayLabels[d] + '</div>'
           + '<div class="ist-pnl ' + pnlC + '">' + pnlS + '</div>'
           + '<div class="ist-meta">'
-          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Win Rate</span><span class="ist-meta-val ' + wrC + '">' + wr + '</span></div>'
+          + '<div class="ist-meta-item"><span class="ist-meta-lbl">Recovery</span><span class="ist-meta-val ' + wrC + '">' + wr + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Trades</span><span class="ist-meta-val">' + ds.total + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">W / L</span><span class="ist-meta-val">' + ds.wins + ' / ' + ds.losses + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + ds.busts + '</span></div>'
@@ -2182,8 +2238,180 @@ function refreshCompareTab() {
   body.innerHTML = html;
 }
 
+// ─── Save test to database (server-side history) ───
+// Builds the payload for the currently-open strategy from the live DOM params
+// plus that strategy's computed results.
+function gatherTestPayload(note) {
+  var strat = selectedStrat;
+  var r = allSimResults[strat];
+  if (!r) return null;
+  var mode = document.querySelector('input[name="simMode"]:checked').value;
+  var mds  = r.grandMDs || [0, 0];
+  return {
+    file_label:     ({{ filename | tojson }} || 'Untitled'),
+    timeframe:      {{ timeframe | tojson }},
+    strategy:       strat,
+    strategy_label: STRAT_LABELS[strat] || strat,
+    mode:           mode,
+    num_men:        (mode === 'menbased') ? (parseInt(document.getElementById('menCount').value, 10) || 2) : null,
+    ladder:         (currentLadder || []).join(', '),
+    buying_price:   currentBuyingPrice,
+    cooldown:       parseInt(document.getElementById('cooldownIn').value, 10) || 0,
+    streak_pattern: document.getElementById('streakPatternIn').value.trim(),
+    stop_wins:      parseInt(document.getElementById('stopWinsIn').value, 10) || 1,
+    streak_all_men: document.getElementById('streakAllMenIn').checked,
+    custom_pattern: (strat === 'custom' && r.customPattern) ? r.customPattern.join(' ')
+                                                            : (document.getElementById('customPatternIn').value || ''),
+    custom_reset:   document.getElementById('customResetPattern').checked,
+    pnl:            parseFloat(r.grandPnl.toFixed(2)),
+    bets:           r.grandBets,
+    wins:           r.grandWins,
+    busts:          r.grandBusts,
+    md1:            parseFloat((mds[0] || 0).toFixed(2)),
+    md2:            parseFloat((mds[1] || 0).toFixed(2)),
+    note:           note || ''
+  };
+}
+
+function openSaveDbModal() {
+  if (!selectedStrat || !Object.keys(allSimResults).length) {
+    alert('Run a simulation and open a strategy first.');
+    return;
+  }
+  document.getElementById('dbNoteInput').value = '';
+  document.getElementById('dbNoteModalStrat').textContent = STRAT_LABELS[selectedStrat] || selectedStrat;
+  document.getElementById('dbNoteModal').style.display = 'flex';
+  document.getElementById('dbNoteInput').focus();
+}
+
+function closeSaveDbModal() {
+  document.getElementById('dbNoteModal').style.display = 'none';
+}
+
+function confirmSaveDb() {
+  var payload = gatherTestPayload(document.getElementById('dbNoteInput').value.trim());
+  if (!payload) { closeSaveDbModal(); return; }
+  var saveBtn = document.getElementById('dbNoteSaveBtn');
+  saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+  fetch('/save-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(function(res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+  .then(function() {
+    closeSaveDbModal();
+    var btn = document.getElementById('saveDbBtn');
+    btn.textContent = '✓ Saved to DB';
+    btn.style.background = '#0d2b1a';
+    setTimeout(function() { btn.textContent = '+ Save to DB'; btn.style.background = '#172a4d'; }, 1800);
+    loadHistory();
+  })
+  .catch(function(e) { alert('Save failed: ' + e.message); })
+  .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });
+}
+
+// ─── Saved-tests history tab ───
+function fmtSignedDollar(v) {
+  v = v || 0;
+  return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
+}
+
+function loadHistory() {
+  var body = document.getElementById('historyBody');
+  fetch('/api/history')
+    .then(function(res) { return res.json(); })
+    .then(function(rows) {
+      updateHistoryCount(rows.length);
+      if (!rows.length) {
+        body.innerHTML = '<div style="color:#484f58;font-size:.85rem;padding:40px 0;text-align:center">No saved tests yet.</div>';
+        return;
+      }
+      var html = '<div style="overflow-x:auto"><table class="atbl" style="min-width:1180px">'
+               + '<thead><tr>'
+               + '<th style="text-align:left">Saved</th>'
+               + '<th style="text-align:left">File</th>'
+               + '<th style="text-align:left">Strategy</th>'
+               + '<th style="text-align:left">Parameters</th>'
+               + '<th>PnL</th><th>Bets</th><th>Wins</th><th>Recov%</th><th>Busts</th><th>MD1</th><th>MD2</th>'
+               + '<th style="text-align:left">Note</th><th></th>'
+               + '</tr></thead><tbody>';
+      for (var i = 0; i < rows.length; i++) {
+        var e = rows[i];
+        var modeLabel = e.mode === 'menbased' ? ('Men-Based (' + (e.num_men || '?') + ')')
+                      : e.mode === 'daywise'  ? 'Day-wise'
+                      : e.mode === 'simple'   ? 'Simple' : (e.mode || '—');
+        var params = modeLabel
+                   + ' &bull; Ladder: ' + escapeHtml(e.ladder || '—')
+                   + ' &bull; Price: $' + (e.buying_price || 0).toFixed(2);
+        if (e.cooldown) params += ' &bull; CD: ' + e.cooldown;
+        if (e.streak_pattern) params += ' &bull; Streak: ' + escapeHtml(e.streak_pattern) + ' &bull; Stop@W: ' + (e.stop_wins || 1) + (e.streak_all_men ? ' &bull; all men' : '');
+        if (e.strategy === 'custom' && e.custom_pattern) params += ' &bull; Pattern: ' + escapeHtml(e.custom_pattern);
+        var pnlC = e.pnl > 0 ? '#7ee787' : e.pnl < 0 ? '#ff7b72' : '#8b949e';
+        var rec  = recovRate(e.wins, e.busts);
+        var recC = rec.cls === 'pos' ? '#7ee787' : rec.cls === 'neg' ? '#ff7b72' : '#8b949e';
+        var recCell = rec.cycles > 0 ? rec.rate + '%' : '—';
+        var note = e.note ? escapeHtml(e.note) : '<span style="color:#484f58">—</span>';
+        html += '<tr>'
+              + '<td style="text-align:left;white-space:nowrap;color:#8b949e;font-size:.74rem">' + escapeHtml(e.created_at || '') + '</td>'
+              + '<td style="text-align:left;color:#58a6ff;font-weight:600">' + escapeHtml(e.file_label || '') + (e.timeframe ? ' <span style="color:#484f58;font-weight:400">' + escapeHtml(e.timeframe) + '</span>' : '') + '</td>'
+              + '<td style="text-align:left;font-weight:700;color:#e6edf3;white-space:nowrap">' + escapeHtml(e.strategy_label || e.strategy || '') + '</td>'
+              + '<td style="text-align:left;color:#8b949e;font-size:.72rem;white-space:normal;min-width:280px">' + params + '</td>'
+              + '<td style="font-weight:700;color:' + pnlC + '">' + fmtSignedDollar(e.pnl) + '</td>'
+              + '<td>' + (e.bets || 0) + '</td>'
+              + '<td>' + (e.wins || 0) + '</td>'
+              + '<td style="font-weight:700;color:' + recC + '">' + recCell + '</td>'
+              + '<td style="color:' + (e.busts > 0 ? '#ff7b72' : '#8b949e') + '">' + (e.busts || 0) + '</td>'
+              + '<td style="color:#ff7b72">' + fmtMD(e.md1) + '</td>'
+              + '<td style="color:#ff7b72">' + fmtMD(e.md2) + '</td>'
+              + '<td style="text-align:left;color:#c9d1d9;font-size:.74rem;white-space:normal;min-width:200px">' + note + '</td>'
+              + '<td><button onclick="deleteHistoryItem(' + e.id + ')" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.9rem;line-height:1">✕</button></td>'
+              + '</tr>';
+      }
+      html += '</tbody></table></div>';
+      body.innerHTML = html;
+    })
+    .catch(function(e) {
+      body.innerHTML = '<div style="color:#f85149;font-size:.85rem;padding:40px 0;text-align:center">Could not load saved tests: ' + e.message + '</div>';
+    });
+}
+
+function updateHistoryCount(n) {
+  var badge = document.getElementById('historyCount');
+  if (n) { badge.textContent = n; badge.style.display = 'inline'; }
+  else   { badge.style.display = 'none'; }
+}
+
+function deleteHistoryItem(id) {
+  if (!confirm('Delete this saved test?')) return;
+  fetch('/api/history/' + id + '/delete', { method: 'POST' })
+    .then(function() { loadHistory(); })
+    .catch(function(e) { alert('Delete failed: ' + e.message); });
+}
+
+function clearHistory() {
+  if (!confirm('Delete ALL saved tests? This cannot be undone.')) return;
+  fetch('/api/history/clear', { method: 'POST' })
+    .then(function() { loadHistory(); })
+    .catch(function(e) { alert('Clear failed: ' + e.message); });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// Refresh the saved-tests list whenever the tab is opened.
+(function() {
+  var ht = document.getElementById('historyTabBtn');
+  if (ht) ht.addEventListener('shown.bs.tab', loadHistory);
+})();
+
 // Init compare badge on load
 refreshCompareTab();
+// Init saved-tests badge on load
+loadHistory();
 </script>
 </body>
 </html>

@@ -22,6 +22,10 @@ env/
 uploads/*
 !uploads/.gitkeep
 
+# Saved-test history database
+results.db
+*.db
+
 # IDE
 .vscode/
 .idea/
