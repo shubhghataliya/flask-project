@@ -6,6 +6,7 @@ import json
 import time
 import threading
 import uuid
+import sqlite3
 import requests as req
 from io import StringIO
 from datetime import datetime
@@ -16,6 +17,77 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# ── Saved-test history database ───────────────────────────────────────────────
+# A single SQLite file holds every test a user explicitly saves from the
+# Martingale Sim analytics panel: the strategy, the parameters used, the
+# headline results and a free-text note ("what was in mind when testing").
+DB_PATH = os.path.join(os.path.dirname(__file__), 'results.db')
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    try:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS saved_tests (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at     TEXT NOT NULL,
+                file_label     TEXT,
+                timeframe      TEXT,
+                strategy       TEXT,
+                strategy_label TEXT,
+                mode           TEXT,
+                num_men        INTEGER,
+                ladder         TEXT,
+                buying_price   REAL,
+                cooldown       INTEGER,
+                streak_pattern TEXT,
+                stop_wins      INTEGER,
+                streak_all_men INTEGER,
+                custom_pattern TEXT,
+                pnl            REAL,
+                bets           INTEGER,
+                wins           INTEGER,
+                busts          INTEGER,
+                md1            REAL,
+                md2            REAL,
+                note           TEXT,
+                data_json      TEXT
+            )
+        ''')
+        # Migrate older databases: add any columns introduced after first run.
+        have = {r[1] for r in conn.execute('PRAGMA table_info(saved_tests)')}
+        for col, decl in (('streak_pattern', 'TEXT'),
+                          ('stop_wins', 'INTEGER'),
+                          ('streak_all_men', 'INTEGER')):
+            if col not in have:
+                conn.execute('ALTER TABLE saved_tests ADD COLUMN %s %s' % (col, decl))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _as_int(v, default=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(v, default=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+init_db()
 
 MONTHS = {
     'january': 1, 'february': 2, 'march': 3, 'april': 4,
@@ -106,9 +178,27 @@ def _get_resolution(market):
 _jobs = {}   # job_id -> dict with keys: status, fetched, total, result, error
 
 
-def fetch_markets_api(crypto, interval, count, job=None):
+def _et_to_utc(dt_str):
+    """Parse a naive 'YYYY-MM-DDTHH:MM' string as US/Eastern (ET) and return a
+    UTC-aware Timestamp, or None if empty/unparseable. DST is handled by the
+    America/New_York zone."""
+    if not dt_str:
+        return None
+    ts = pd.to_datetime(dt_str, errors='coerce')
+    if pd.isna(ts):
+        return None
+    try:
+        ts = ts.tz_localize('America/New_York', ambiguous=True, nonexistent='shift_forward')
+    except Exception:
+        ts = ts.tz_localize('America/New_York')
+    return ts.tz_convert('UTC')
+
+
+def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=None):
     """
-    Fetch `count` most-recent resolved markets from Polymarket.
+    Fetch up to `count` resolved markets from Polymarket.
+    If `start_dt` / `end_dt` (ISO datetime strings) are given, only markets whose
+    close time (endDate, UTC) falls within [start_dt, end_dt] are returned.
     If `job` dict is provided, updates job['fetched'] live for progress polling.
     """
     cfg = CRYPTO_CONFIG[crypto]
@@ -117,9 +207,17 @@ def fetch_markets_api(crypto, interval, count, job=None):
     keywords = cfg['keywords']
     non_keywords = cfg['non_keywords']
 
+    # Optional date-range bounds. Inputs are interpreted as US/Eastern (ET) and
+    # converted to UTC to compare against each market's UTC close (endDate).
+    start_ts = _et_to_utc(start_dt)
+    end_ts   = _et_to_utc(end_dt)
+    start_iso = start_ts.strftime('%Y-%m-%dT%H:%M:%SZ') if start_ts is not None else None
+    end_iso   = end_ts.strftime('%Y-%m-%dT%H:%M:%SZ')   if end_ts   is not None else None
+
     all_markets = []
     seen_ids = set()
-    cursor = None
+    cursor    = end_iso   # current upper bound string (end_date_max)
+    cursor_ts = end_ts    # same bound as a Timestamp, for safe comparisons
 
     while len(all_markets) < count:
         params = {
@@ -134,6 +232,13 @@ def fetch_markets_api(crypto, interval, count, job=None):
             params['exclude_tag_id'] = list(excluded)
         if cursor:
             params['end_date_max'] = cursor
+        # Only add the lower bound when it is strictly below the upper bound;
+        # the API rejects end_date_min >= end_date_max with a 422 "invalid time range".
+        if start_iso:
+            if cursor_ts is None or start_ts < cursor_ts:
+                params['end_date_min'] = start_iso
+            else:
+                break   # range window collapsed — nothing left to fetch
 
         resp = req.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
         resp.raise_for_status()
@@ -155,40 +260,51 @@ def fetch_markets_api(crypto, interval, count, job=None):
                 continue
             for m in event.get('markets', []):
                 mid = m.get('id')
-                if mid and mid not in seen_ids:
-                    seen_ids.add(mid)
-                    m['_event_title'] = title
-                    batch_markets.append(m)
+                if not mid or mid in seen_ids:
+                    continue
+                # Keep only markets whose own close time is inside the range.
+                if start_ts is not None or end_ts is not None:
+                    edt = pd.to_datetime(m.get('endDate'), utc=True, errors='coerce')
+                    if pd.isna(edt):
+                        continue
+                    if start_ts is not None and edt < start_ts:
+                        continue
+                    if end_ts is not None and edt > end_ts:
+                        continue
+                seen_ids.add(mid)
+                m['_event_title'] = title
+                batch_markets.append(m)
 
-        if not batch_markets:
-            oldest = min((e.get('endDate', '') for e in events if e.get('endDate')), default=None)
-            if not oldest or oldest == cursor:
-                break
-            cursor = oldest
-            time.sleep(0.2)
-            continue
-
-        all_markets.extend(batch_markets)
-        if job is not None:
-            job['fetched'] = min(len(all_markets), count)
+        if batch_markets:
+            all_markets.extend(batch_markets)
+            if job is not None:
+                job['fetched'] = min(len(all_markets), count)
 
         oldest = min((e.get('endDate', '') for e in events if e.get('endDate')), default=None)
         if not oldest or oldest == cursor:
             break
-        cursor = oldest
+        oldest_ts = pd.to_datetime(oldest, utc=True, errors='coerce')
+        # Stop once we've reached (or passed) the start of the requested range.
+        if start_ts is not None and pd.notna(oldest_ts) and oldest_ts <= start_ts:
+            break
+        cursor    = oldest
+        cursor_ts = oldest_ts
         time.sleep(0.2)
 
     all_markets.sort(key=lambda m: m.get('endDate', ''), reverse=True)
     return all_markets[:count]
 
 
-def _run_fetch_job(job_id, crypto, interval, count):
+def _run_fetch_job(job_id, crypto, interval, count, start_dt=None, end_dt=None):
     job = _jobs[job_id]
     try:
-        markets = fetch_markets_api(crypto, interval, count, job)
+        markets = fetch_markets_api(crypto, interval, count, job, start_dt, end_dt)
         if not markets:
             job['status'] = 'error'
-            job['error'] = 'No markets returned from API. Try a different coin or interval.'
+            job['error'] = ('No markets found for the selected date range. '
+                            'Try widening the dates, or a different coin/interval.') \
+                           if (start_dt or end_dt) \
+                           else 'No markets returned from API. Try a different coin or interval.'
             return
         rows, dates, dates_iso, timeframe = process_markets(markets, interval)
         job['result'] = (rows, dates, dates_iso, timeframe,
@@ -396,6 +512,8 @@ def load_file(filename):
 def fetch_start():
     crypto   = request.form.get('crypto', 'btc').lower()
     interval = request.form.get('interval', '15m').lower()
+    start_dt = request.form.get('start') or None
+    end_dt   = request.form.get('end') or None
     try:
         count = max(1, int(request.form.get('count', 2000)))
     except ValueError:
@@ -409,7 +527,8 @@ def fetch_start():
     job_id = str(uuid.uuid4())
     _jobs[job_id] = {'status': 'running', 'fetched': 0, 'total': count, 'result': None, 'error': None}
 
-    t = threading.Thread(target=_run_fetch_job, args=(job_id, crypto, interval, count), daemon=True)
+    t = threading.Thread(target=_run_fetch_job,
+                         args=(job_id, crypto, interval, count, start_dt, end_dt), daemon=True)
     t.start()
 
     return jsonify({'job_id': job_id})
@@ -444,6 +563,92 @@ def delete_file(filename):
     if os.path.exists(path):
         os.remove(path)
     return redirect('/')
+
+
+# ── Saved-test history endpoints ──────────────────────────────────────────────
+@app.route('/save-test', methods=['POST'])
+def save_test():
+    """Persist one tested strategy + its parameters, results and note."""
+    data = request.get_json(silent=True) or {}
+    if not data.get('strategy'):
+        return jsonify({'error': 'Missing strategy.'}), 400
+
+    num_men = data.get('num_men')
+    num_men = _as_int(num_men, None) if num_men not in (None, '') else None
+
+    row = (
+        datetime.now().strftime('%Y-%m-%d %H:%M'),
+        (data.get('file_label') or '').strip() or 'Untitled',
+        data.get('timeframe') or '',
+        data.get('strategy') or '',
+        data.get('strategy_label') or '',
+        data.get('mode') or '',
+        num_men,
+        data.get('ladder') or '',
+        _as_float(data.get('buying_price')),
+        _as_int(data.get('cooldown')),
+        data.get('streak_pattern') or '',
+        _as_int(data.get('stop_wins'), 1),
+        1 if data.get('streak_all_men') else 0,
+        data.get('custom_pattern') or '',
+        _as_float(data.get('pnl')),
+        _as_int(data.get('bets')),
+        _as_int(data.get('wins')),
+        _as_int(data.get('busts')),
+        _as_float(data.get('md1')),
+        _as_float(data.get('md2')),
+        (data.get('note') or '').strip(),
+        json.dumps(data),
+    )
+
+    conn = get_db()
+    try:
+        cur = conn.execute('''
+            INSERT INTO saved_tests
+                (created_at, file_label, timeframe, strategy, strategy_label, mode,
+                 num_men, ladder, buying_price, cooldown, streak_pattern, stop_wins,
+                 streak_all_men, custom_pattern, pnl, bets, wins, busts, md1, md2, note, data_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ''', row)
+        conn.commit()
+        new_id = cur.lastrowid
+    finally:
+        conn.close()
+    return jsonify({'ok': True, 'id': new_id})
+
+
+@app.route('/api/history')
+def api_history():
+    """Return every saved test, newest first."""
+    conn = get_db()
+    try:
+        rows = conn.execute('SELECT * FROM saved_tests ORDER BY id DESC').fetchall()
+    finally:
+        conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/history/<int:test_id>/delete', methods=['POST'])
+def api_history_delete(test_id):
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM saved_tests WHERE id = ?', (test_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/history/clear', methods=['POST'])
+def api_history_clear():
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM saved_tests')
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'ok': True})
+
 
 if __name__ == '__main__':
     app.run(debug=True)
