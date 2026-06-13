@@ -2317,63 +2317,115 @@ function fmtSignedDollar(v) {
   return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
 }
 
+var historyRows = [];                                  // last-fetched saved tests
+var historySort = { key: 'created_at', dir: 'desc' };  // default: newest first
+
+// Sort value for a given column key. Recov% is derived from wins/busts; rows
+// with no completed sequences sort below everything else.
+function historyValue(e, key) {
+  if (key === 'recov') {
+    var cyc = (e.wins || 0) + (e.busts || 0);
+    return cyc > 0 ? e.wins / cyc : -1;
+  }
+  return e[key];
+}
+
+// Click handler on a column header: toggle direction if already active,
+// otherwise activate it (text columns default A→Z, the rest high→low).
+function sortHistory(key) {
+  if (historySort.key === key) {
+    historySort.dir = historySort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    historySort.key = key;
+    historySort.dir = (key === 'file_label' || key === 'strategy_label') ? 'asc' : 'desc';
+  }
+  renderHistory();
+}
+
 function loadHistory() {
   var body = document.getElementById('historyBody');
   fetch('/api/history')
     .then(function(res) { return res.json(); })
     .then(function(rows) {
-      updateHistoryCount(rows.length);
-      if (!rows.length) {
-        body.innerHTML = '<div style="color:#484f58;font-size:.85rem;padding:40px 0;text-align:center">No saved tests yet.</div>';
-        return;
-      }
-      var html = '<div style="overflow-x:auto"><table class="atbl" style="min-width:1180px">'
-               + '<thead><tr>'
-               + '<th style="text-align:left">Saved</th>'
-               + '<th style="text-align:left">File</th>'
-               + '<th style="text-align:left">Strategy</th>'
-               + '<th style="text-align:left">Parameters</th>'
-               + '<th>PnL</th><th>Bets</th><th>Wins</th><th>Recov%</th><th>Busts</th><th>MD1</th><th>MD2</th>'
-               + '<th style="text-align:left">Note</th><th></th>'
-               + '</tr></thead><tbody>';
-      for (var i = 0; i < rows.length; i++) {
-        var e = rows[i];
-        var modeLabel = e.mode === 'menbased' ? ('Men-Based (' + (e.num_men || '?') + ')')
-                      : e.mode === 'daywise'  ? 'Day-wise'
-                      : e.mode === 'simple'   ? 'Simple' : (e.mode || '—');
-        var params = modeLabel
-                   + ' &bull; Ladder: ' + escapeHtml(e.ladder || '—')
-                   + ' &bull; Price: $' + (e.buying_price || 0).toFixed(2);
-        if (e.cooldown) params += ' &bull; CD: ' + e.cooldown;
-        if (e.streak_pattern) params += ' &bull; Streak: ' + escapeHtml(e.streak_pattern) + ' &bull; Stop@W: ' + (e.stop_wins || 1) + (e.streak_all_men ? ' &bull; all men' : '');
-        if (e.strategy === 'custom' && e.custom_pattern) params += ' &bull; Pattern: ' + escapeHtml(e.custom_pattern);
-        var pnlC = e.pnl > 0 ? '#7ee787' : e.pnl < 0 ? '#ff7b72' : '#8b949e';
-        var rec  = recovRate(e.wins, e.busts);
-        var recC = rec.cls === 'pos' ? '#7ee787' : rec.cls === 'neg' ? '#ff7b72' : '#8b949e';
-        var recCell = rec.cycles > 0 ? rec.rate + '%' : '—';
-        var note = e.note ? escapeHtml(e.note) : '<span style="color:#484f58">—</span>';
-        html += '<tr>'
-              + '<td style="text-align:left;white-space:nowrap;color:#8b949e;font-size:.74rem">' + escapeHtml(e.created_at || '') + '</td>'
-              + '<td style="text-align:left;color:#58a6ff;font-weight:600">' + escapeHtml(e.file_label || '') + (e.timeframe ? ' <span style="color:#484f58;font-weight:400">' + escapeHtml(e.timeframe) + '</span>' : '') + '</td>'
-              + '<td style="text-align:left;font-weight:700;color:#e6edf3;white-space:nowrap">' + escapeHtml(e.strategy_label || e.strategy || '') + '</td>'
-              + '<td style="text-align:left;color:#8b949e;font-size:.72rem;white-space:normal;min-width:280px">' + params + '</td>'
-              + '<td style="font-weight:700;color:' + pnlC + '">' + fmtSignedDollar(e.pnl) + '</td>'
-              + '<td>' + (e.bets || 0) + '</td>'
-              + '<td>' + (e.wins || 0) + '</td>'
-              + '<td style="font-weight:700;color:' + recC + '">' + recCell + '</td>'
-              + '<td style="color:' + (e.busts > 0 ? '#ff7b72' : '#8b949e') + '">' + (e.busts || 0) + '</td>'
-              + '<td style="color:#ff7b72">' + fmtMD(e.md1) + '</td>'
-              + '<td style="color:#ff7b72">' + fmtMD(e.md2) + '</td>'
-              + '<td style="text-align:left;color:#c9d1d9;font-size:.74rem;white-space:normal;min-width:200px">' + note + '</td>'
-              + '<td><button onclick="deleteHistoryItem(' + e.id + ')" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.9rem;line-height:1">✕</button></td>'
-              + '</tr>';
-      }
-      html += '</tbody></table></div>';
-      body.innerHTML = html;
+      historyRows = rows || [];
+      updateHistoryCount(historyRows.length);
+      renderHistory();
     })
     .catch(function(e) {
       body.innerHTML = '<div style="color:#f85149;font-size:.85rem;padding:40px 0;text-align:center">Could not load saved tests: ' + e.message + '</div>';
     });
+}
+
+function renderHistory() {
+  var body = document.getElementById('historyBody');
+  if (!historyRows.length) {
+    body.innerHTML = '<div style="color:#484f58;font-size:.85rem;padding:40px 0;text-align:center">No saved tests yet.</div>';
+    return;
+  }
+
+  // Sort a shallow copy by the active column; ties fall back to id.
+  var key = historySort.key, dir = historySort.dir;
+  var rows = historyRows.slice();
+  rows.sort(function(a, b) {
+    var va = historyValue(a, key), vb = historyValue(b, key), cmp;
+    if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb;
+    else cmp = String(va == null ? '' : va).toLowerCase().localeCompare(String(vb == null ? '' : vb).toLowerCase());
+    if (cmp === 0) cmp = (a.id || 0) - (b.id || 0);
+    return dir === 'asc' ? cmp : -cmp;
+  });
+
+  // Sortable header cell with an active-direction arrow.
+  function hTh(label, k, leftAlign) {
+    var arrow = historySort.key === k ? (historySort.dir === 'asc' ? ' ▲' : ' ▼') : ' <span style="color:#484f58">↕</span>';
+    var st = 'cursor:pointer;user-select:none;white-space:nowrap;' + (leftAlign ? 'text-align:left' : '');
+    return '<th onclick="sortHistory(\'' + k + '\')" style="' + st + '">' + label + arrow + '</th>';
+  }
+
+  var html = '<div style="overflow-x:auto"><table class="atbl" style="min-width:1180px">'
+           + '<thead><tr>'
+           + hTh('Saved', 'created_at', true)
+           + hTh('File', 'file_label', true)
+           + hTh('Strategy', 'strategy_label', true)
+           + '<th style="text-align:left">Parameters</th>'
+           + hTh('PnL', 'pnl') + hTh('Bets', 'bets') + hTh('Wins', 'wins')
+           + hTh('Recov%', 'recov') + hTh('Busts', 'busts')
+           + hTh('MD1', 'md1') + hTh('MD2', 'md2')
+           + '<th style="text-align:left">Note</th><th></th>'
+           + '</tr></thead><tbody>';
+  for (var i = 0; i < rows.length; i++) {
+    var e = rows[i];
+    var modeLabel = e.mode === 'menbased' ? ('Men-Based (' + (e.num_men || '?') + ')')
+                  : e.mode === 'daywise'  ? 'Day-wise'
+                  : e.mode === 'simple'   ? 'Simple' : (e.mode || '—');
+    var params = modeLabel
+               + ' &bull; Ladder: ' + escapeHtml(e.ladder || '—')
+               + ' &bull; Price: $' + (e.buying_price || 0).toFixed(2);
+    if (e.cooldown) params += ' &bull; CD: ' + e.cooldown;
+    if (e.streak_pattern) params += ' &bull; Streak: ' + escapeHtml(e.streak_pattern) + ' &bull; Stop@W: ' + (e.stop_wins || 1) + (e.streak_all_men ? ' &bull; all men' : '');
+    if (e.strategy === 'custom' && e.custom_pattern) params += ' &bull; Pattern: ' + escapeHtml(e.custom_pattern);
+    var pnlC = e.pnl > 0 ? '#7ee787' : e.pnl < 0 ? '#ff7b72' : '#8b949e';
+    var rec  = recovRate(e.wins, e.busts);
+    var recC = rec.cls === 'pos' ? '#7ee787' : rec.cls === 'neg' ? '#ff7b72' : '#8b949e';
+    var recCell = rec.cycles > 0 ? rec.rate + '%' : '—';
+    var note = e.note ? escapeHtml(e.note) : '<span style="color:#484f58">—</span>';
+    html += '<tr>'
+          + '<td style="text-align:left;white-space:nowrap;color:#8b949e;font-size:.74rem">' + escapeHtml(e.created_at || '') + '</td>'
+          + '<td style="text-align:left;color:#58a6ff;font-weight:600">' + escapeHtml(e.file_label || '') + (e.timeframe ? ' <span style="color:#484f58;font-weight:400">' + escapeHtml(e.timeframe) + '</span>' : '') + '</td>'
+          + '<td style="text-align:left;font-weight:700;color:#e6edf3;white-space:nowrap">' + escapeHtml(e.strategy_label || e.strategy || '') + '</td>'
+          + '<td style="text-align:left;color:#8b949e;font-size:.72rem;white-space:normal;min-width:280px">' + params + '</td>'
+          + '<td style="font-weight:700;color:' + pnlC + '">' + fmtSignedDollar(e.pnl) + '</td>'
+          + '<td>' + (e.bets || 0) + '</td>'
+          + '<td>' + (e.wins || 0) + '</td>'
+          + '<td style="font-weight:700;color:' + recC + '">' + recCell + '</td>'
+          + '<td style="color:' + (e.busts > 0 ? '#ff7b72' : '#8b949e') + '">' + (e.busts || 0) + '</td>'
+          + '<td style="color:#ff7b72">' + fmtMD(e.md1) + '</td>'
+          + '<td style="color:#ff7b72">' + fmtMD(e.md2) + '</td>'
+          + '<td style="text-align:left;color:#c9d1d9;font-size:.74rem;white-space:normal;min-width:200px">' + note + '</td>'
+          + '<td><button onclick="deleteHistoryItem(' + e.id + ')" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.9rem;line-height:1">✕</button></td>'
+          + '</tr>';
+  }
+  html += '</tbody></table></div>';
+  body.innerHTML = html;
 }
 
 function updateHistoryCount(n) {
