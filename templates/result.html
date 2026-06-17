@@ -616,6 +616,16 @@ var STRAT_DESCS  = {
   custom:    'Use a custom Up/Down pattern for each bet sequence.',
   combined:  'Bet both Up and Down simultaneously on every candle with independent ladder step counters.'
 };
+var STRAT_SHORT  = {
+  all_up:             'Always Up',
+  all_down:           'Always Down',
+  same:               'Follow momentum',
+  opposite:           'Fade reversal',
+  interlock_opposite: 'Fade interlock',
+  interlock_same:     'Follow interlock',
+  custom:             'Custom pattern',
+  combined:           'Dual direction'
+};
 
 var allSimResults = {};
 var selectedStrat = null;
@@ -1489,7 +1499,10 @@ function renderStratCards() {
     html += '<div class="col-6 col-md">'
           + '<div class="strat-card" id="scard_' + s + '" onclick="showAnalytics(\'' + s + '\')">'
           + '<div class="strat-name">' + STRAT_LABELS[s] + '</div>'
-          + '<div class="strat-desc">' + STRAT_DESCS[s] + '</div>'
+          + '<div class="strat-desc">' + STRAT_SHORT[s]
+          + ' <span style="color:#58a6ff;cursor:pointer;font-size:.68rem" onclick="event.stopPropagation();var t=this.nextElementSibling;var open=t.style.display===\'inline\';t.style.display=open?\'none\':\'inline\';this.textContent=open?\'read more...\':\'less\'">read more...</span>'
+          + '<span style="display:none"> — ' + STRAT_DESCS[s] + '</span>'
+          + '</div>'
           + '<div class="strat-pnl ' + pnlC + '">' + pnlS + '</div>'
           + '<div class="strat-meta">'
           + '<span class="' + rec.cls + '">Recov <strong>' + rec.rate + '%</strong></span>'
