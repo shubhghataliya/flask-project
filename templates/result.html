@@ -1496,6 +1496,14 @@ function renderStratCards() {
 
     var md1 = (r.grandMDs && r.grandMDs[0]) || 0;
     var md2 = (r.grandMDs && r.grandMDs[1]) || 0;
+    var slotsPerDay  = ROWS.length || 1;
+    var impliedDays  = r.grandBets > 0 ? r.grandBets / slotsPerDay : (DATES.length || 1);
+    var app = r.grandPnl   / impliedDays;
+    var abp = r.grandBusts / impliedDays;
+    var appS = (app >= 0 ? '+$' : '-$') + Math.abs(app).toFixed(2);
+    var appC = app > 0 ? 'pos' : app < 0 ? 'neg' : 'neu';
+    var abpC = abp > 0 ? 'neg' : 'pos';
+    var dayLabel = r.grandBets + ' bets ÷ ' + slotsPerDay + ' slots = ' + impliedDays.toFixed(1) + 'd';
     html += '<div class="col-6 col-md">'
           + '<div class="strat-card" id="scard_' + s + '" onclick="showAnalytics(\'' + s + '\')">'
           + '<div class="strat-name">' + STRAT_LABELS[s] + '</div>'
@@ -1511,6 +1519,9 @@ function renderStratCards() {
           + '<span class="' + buC + '">Busts <strong>' + r.grandBusts + '</strong></span>'
           + '<span class="neg">MD1 <strong>' + fmtMD(md1) + '</strong></span>'
           + '<span class="neg">MD2 <strong>' + fmtMD(md2) + '</strong></span>'
+          + '<span title="' + dayLabel + '">TD <strong>' + impliedDays.toFixed(1) + '</strong></span>'
+          + '<span class="' + appC + '" title="Avg profit per day (' + dayLabel + ')">APP <strong>' + appS + '</strong></span>'
+          + '<span class="' + abpC + '" title="Avg busts per day (' + dayLabel + ')">ABP <strong>' + abp.toFixed(2) + '</strong></span>'
           + '</div>'
           + '<button class="btn-analytics">Analytics ↓</button>'
           + '</div></div>';
