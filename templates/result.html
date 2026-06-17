@@ -1868,6 +1868,13 @@ function renderIstSection(slotResults, overlaysMap, bandMDs, dowMDs) {
   var bands = computeIstBandStats(slotResults);
   bandMDs = bandMDs || [[0,0],[0,0],[0,0],[0,0]];
 
+  // Count how many ROWS fall into each IST band (slots per band per day)
+  var slotsPerBand = [0, 0, 0, 0];
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var rb = getIstBand(ROWS[ri].time);
+    if (rb >= 0 && rb < 4) slotsPerBand[rb]++;
+  }
+
   var html = '';
   for (var b = 0; b < 4; b++) {
     var bd = bands[b];
@@ -1880,6 +1887,14 @@ function renderIstSection(slotResults, overlaysMap, bandMDs, dowMDs) {
     var bMd   = bandMDs[b] || [0,0];
     var md1C  = (bMd[0] || 0) > 0 ? 'neg' : 'neu';
     var md2C  = (bMd[1] || 0) > 0 ? 'neg' : 'neu';
+    var bSlots      = slotsPerBand[b] || 1;
+    var bImpDays    = bd.total > 0 ? bd.total / bSlots : 0;
+    var bApp        = bImpDays > 0 ? bd.pnl / bImpDays : 0;
+    var bAbp        = bImpDays > 0 ? bd.busts / bImpDays : 0;
+    var bAppS       = (bApp >= 0 ? '+$' : '-$') + Math.abs(bApp).toFixed(2);
+    var bAppC       = bApp > 0 ? 'pos' : bApp < 0 ? 'neg' : 'neu';
+    var bAbpC       = bAbp > 0 ? 'neg' : 'pos';
+    var bDayTip     = bd.total + ' bets ÷ ' + bSlots + ' slots = ' + bImpDays.toFixed(1) + 'd';
     html += '<div class="col-6 col-md-3">'
           + '<div class="ist-card">'
           + '<div class="ist-band-label">' + IST_BANDS[b].label + '</div>'
@@ -1891,6 +1906,9 @@ function renderIstSection(slotResults, overlaysMap, bandMDs, dowMDs) {
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + bd.busts + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD1</span><span class="ist-meta-val ' + md1C + '">' + fmtMD(bMd[0]) + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD2</span><span class="ist-meta-val ' + md2C + '">' + fmtMD(bMd[1]) + '</span></div>'
+          + '<div class="ist-meta-item" title="' + bDayTip + '"><span class="ist-meta-lbl">TD</span><span class="ist-meta-val">' + bImpDays.toFixed(1) + '</span></div>'
+          + '<div class="ist-meta-item" title="Avg profit/day (' + bDayTip + ')"><span class="ist-meta-lbl">APP</span><span class="ist-meta-val ' + bAppC + '">' + bAppS + '</span></div>'
+          + '<div class="ist-meta-item" title="Avg busts/day (' + bDayTip + ')"><span class="ist-meta-lbl">ABP</span><span class="ist-meta-val ' + bAbpC + '">' + bAbp.toFixed(2) + '</span></div>'
           + '</div></div></div>';
   }
   document.getElementById('istCards').innerHTML = html;
@@ -1985,6 +2003,7 @@ function renderDowPnlChart(overlaysMap, dowMDs) {
   dowMDs = dowMDs || [[0,0],[0,0],[0,0],[0,0],[0,0],[0,0],[0,0]];
 
   // Render day-of-week cards
+  var dowSlotsPerDay = ROWS.length || 1;
   var html = '';
   for (var d = 0; d < 7; d++) {
     var ds    = dayStats[d];
@@ -1997,6 +2016,13 @@ function renderDowPnlChart(overlaysMap, dowMDs) {
     var dMd   = dowMDs[d] || [0,0];
     var md1C  = (dMd[0] || 0) > 0 ? 'neg' : 'neu';
     var md2C  = (dMd[1] || 0) > 0 ? 'neg' : 'neu';
+    var dImpDays = ds.total > 0 ? ds.total / dowSlotsPerDay : 0;
+    var dApp     = dImpDays > 0 ? ds.pnl / dImpDays : 0;
+    var dAbp     = dImpDays > 0 ? ds.busts / dImpDays : 0;
+    var dAppS    = (dApp >= 0 ? '+$' : '-$') + Math.abs(dApp).toFixed(2);
+    var dAppC    = dApp > 0 ? 'pos' : dApp < 0 ? 'neg' : 'neu';
+    var dAbpC    = dAbp > 0 ? 'neg' : 'pos';
+    var dDayTip  = ds.total + ' bets ÷ ' + dowSlotsPerDay + ' slots = ' + dImpDays.toFixed(1) + 'd';
     html += '<div class="col-6 col-sm-4 col-md-3 col-lg">'
           + '<div class="ist-card">'
           + '<div class="ist-band-label">' + dayLabels[d] + '</div>'
@@ -2008,6 +2034,9 @@ function renderDowPnlChart(overlaysMap, dowMDs) {
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">Busts</span><span class="ist-meta-val ' + buC + '">' + ds.busts + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD1</span><span class="ist-meta-val ' + md1C + '">' + fmtMD(dMd[0]) + '</span></div>'
           + '<div class="ist-meta-item"><span class="ist-meta-lbl">MD2</span><span class="ist-meta-val ' + md2C + '">' + fmtMD(dMd[1]) + '</span></div>'
+          + '<div class="ist-meta-item" title="' + dDayTip + '"><span class="ist-meta-lbl">TD</span><span class="ist-meta-val">' + dImpDays.toFixed(1) + '</span></div>'
+          + '<div class="ist-meta-item" title="Avg profit/day (' + dDayTip + ')"><span class="ist-meta-lbl">APP</span><span class="ist-meta-val ' + dAppC + '">' + dAppS + '</span></div>'
+          + '<div class="ist-meta-item" title="Avg busts/day (' + dDayTip + ')"><span class="ist-meta-lbl">ABP</span><span class="ist-meta-val ' + dAbpC + '">' + dAbp.toFixed(2) + '</span></div>'
           + '</div></div></div>';
   }
   document.getElementById('dowCards').innerHTML = html;
