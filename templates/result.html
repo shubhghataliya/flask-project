@@ -1507,7 +1507,7 @@ function renderStratCards() {
     html += '<div class="col-6 col-md">'
           + '<div class="strat-card" id="scard_' + s + '" onclick="showAnalytics(\'' + s + '\')">'
           + '<div class="strat-name">' + STRAT_LABELS[s] + '</div>'
-          + '<div class="strat-desc">' + STRAT_SHORT[s]
+          + '<div class="strat-desc">' + STRAT_SHORT[s].split(' ')[0]
           + ' <span style="color:#58a6ff;cursor:pointer;font-size:.68rem" onclick="event.stopPropagation();var t=this.nextElementSibling;var open=t.style.display===\'inline\';t.style.display=open?\'none\':\'inline\';this.textContent=open?\'read more...\':\'less\'">read more...</span>'
           + '<span style="display:none"> — ' + STRAT_DESCS[s] + '</span>'
           + '</div>'
