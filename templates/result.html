@@ -353,6 +353,47 @@
               <button class="btn btn-run text-white w-100" onclick="runAllSims()">Run Simulation</button>
             </div>
 
+            <!-- Time Entry gate -->
+            <div class="col-12">
+              <div style="border:1px solid #21262d;border-radius:10px;padding:12px 14px;background:#0d1117">
+                <label class="form-label d-block" style="margin-bottom:8px">
+                  Time Entry
+                  <span style="font-weight:400;text-transform:none">(enter market at specific time slots every day, then bet until N wins)</span>
+                </label>
+                <div class="row g-3 align-items-end">
+                  <div class="col-auto" style="min-width:320px">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                      <label class="form-label" style="font-size:.72rem;margin:0">Select entry time slots</label>
+                      <span style="display:flex;gap:6px">
+                        <button type="button" onclick="timeChipsSelectAll(true)"
+                          style="font-size:.65rem;padding:1px 7px;border-radius:3px;border:1px solid #30363d;background:#161b22;color:#8b949e;cursor:pointer">
+                          All
+                        </button>
+                        <button type="button" onclick="timeChipsSelectAll(false)"
+                          style="font-size:.65rem;padding:1px 7px;border-radius:3px;border:1px solid #30363d;background:#161b22;color:#8b949e;cursor:pointer">
+                          None
+                        </button>
+                      </span>
+                    </div>
+                    <div id="timeEntryChips" style="display:flex;flex-wrap:wrap;gap:5px;max-height:100px;overflow-y:auto;padding:6px;background:#161b22;border:1px solid #30363d;border-radius:6px">
+                      <span style="color:#484f58;font-size:.7rem">Loading slots…</span>
+                    </div>
+                  </div>
+                  <div class="col-auto">
+                    <label class="form-label d-block" style="font-size:.72rem">Stop after wins</label>
+                    <input class="form-control" type="number" id="timeStopWinsIn" value="1" min="1" max="50" step="1" style="width:130px">
+                  </div>
+                  <div class="col">
+                    <div style="font-size:.72rem;color:#8b949e">
+                      Select one or more time slots. Every day at those times a betting session starts.
+                      In Men-Based mode only the man who owns that candle activates — he then bets his own ladder until <em>Stop after wins</em> wins, then waits for the next day.
+                      Multiple times = multiple independent daily sessions.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- Streak entry / exit gate -->
             <div class="col-12">
               <div style="border:1px solid #21262d;border-radius:10px;padding:12px 14px;background:#0d1117">
@@ -562,6 +603,34 @@
 var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
+
+// ─── Populate Time Entry chips from ROWS ───
+function applyChipState(chip, on) {
+  if (on) { chip.classList.add('selected'); }
+  else    { chip.classList.remove('selected'); }
+  chip.style.background  = on ? '#1f6feb' : '#0d1117';
+  chip.style.color       = on ? '#ffffff'  : '#8b949e';
+  chip.style.borderColor = on ? '#388bfd'  : '#30363d';
+}
+function timeChipsSelectAll(select) {
+  var chips = document.querySelectorAll('#timeEntryChips .time-chip');
+  for (var i = 0; i < chips.length; i++) applyChipState(chips[i], select);
+}
+(function() {
+  var container = document.getElementById('timeEntryChips');
+  if (!container || !ROWS || !ROWS.length) return;
+  container.innerHTML = '';
+  for (var i = 0; i < ROWS.length; i++) {
+    var chip = document.createElement('span');
+    chip.className = 'time-chip';
+    chip.dataset.time = ROWS[i].time;
+    chip.textContent = ROWS[i].time;
+    chip.style.cssText = 'display:inline-block;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:.7rem;' +
+      'border:1px solid #30363d;background:#0d1117;color:#8b949e;user-select:none;';
+    chip.addEventListener('click', function() { applyChipState(this, !this.classList.contains('selected')); });
+    container.appendChild(chip);
+  }
+})();
 
 // ─── Time Format Toggle ───
 var timeFormat24h = false; // false = 12h, true = 24h
@@ -778,10 +847,12 @@ function fmtMDs(mds) { mds = mds || [0,0]; return 'MD1 ' + fmtMD(mds[0]) + ' · 
 // (both thresholds 0) the session is active from the start = old behaviour.
 // ─────────────────────────────────────────────────────────────────
 function gateCfg(gate) {
-  var pat = (gate && Array.isArray(gate.pattern) && gate.pattern.length > 0) ? gate.pattern : [];
-  var sw  = (gate && gate.stopWins > 0) ? gate.stopWins : 1;
-  var all = !!(gate && gate.allMen);
-  return { on: pat.length > 0, pattern: pat, stopWins: sw, allMen: all };
+  var pat   = (gate && Array.isArray(gate.pattern) && gate.pattern.length > 0) ? gate.pattern : [];
+  var sw    = (gate && gate.stopWins > 0) ? gate.stopWins : 1;
+  var all   = !!(gate && gate.allMen);
+  var times = (gate && Array.isArray(gate.times) && gate.times.length > 0) ? gate.times : [];
+  var tsw   = (gate && gate.timeStopWins > 0) ? gate.timeStopWins : 1;
+  return { on: pat.length > 0 || times.length > 0, pattern: pat, stopWins: sw, allMen: all, times: times, timeStopWins: tsw };
 }
 // KMP-style: how many tokens of the pattern are already matched after a full
 // match (longest proper prefix that equals the suffix, strict token equality).
@@ -799,35 +870,51 @@ function patternOverlap(pat) {
   return 0;
 }
 // Fresh per-session state. active starts true only when the gate is off.
-function gateState(g) { return { active: !g.on, patPos: 0, wins: 0 }; }
+// sw = effective stop-wins for the current active session (set on activation).
+function gateState(g) { return { active: !g.on, patPos: 0, wins: 0, sw: g.stopWins }; }
 
-// Run for every candle while IDLE. Advances the pattern position on each
-// matching candle. Resets on mismatch (with overlap check for pattern[0]).
-// Flips to ACTIVE once the full pattern is matched. Returns true whenever
-// the candle should be skipped — the pattern-completing candle is never bet.
-function gateIdle(g, st, actual) {
+// Run for every candle while IDLE. Checks time-entry first, then pattern.
+// Returns false if we should BET this candle (gate off, or time gate fires here,
+// or already active). Returns true to SKIP the candle (still idle / pattern-completing).
+// rowTime: the time string of this candle (e.g. "01:00 PM"). Pass for time-gate support.
+function gateIdle(g, st, actual, rowTime) {
   if (!g.on || st.active) return false;
-  var tok = g.pattern[st.patPos];
-  if (tok === 'any' || tok === actual) {
-    st.patPos++;
-  } else {
-    // mismatch: reset, then check if current result starts a new match
-    st.patPos = 0;
-    var tok0 = g.pattern[0];
-    if (tok0 === 'any' || tok0 === actual) st.patPos = 1;
+
+  // Time entry: if this candle's time is one of the selected entry times, activate
+  // immediately and bet ON this candle (return false so the caller doesn't skip it).
+  if (g.times.length > 0 && rowTime) {
+    for (var ti = 0; ti < g.times.length; ti++) {
+      if (g.times[ti] === rowTime) {
+        st.active = true; st.wins = 0; st.patPos = 0; st.sw = g.timeStopWins;
+        return false;  // do NOT skip — start betting right here
+      }
+    }
   }
-  if (st.patPos >= g.pattern.length) {
-    st.active = true; st.wins = 0; st.patPos = 0;
+
+  // Pattern (streak) gate: advance KMP state and activate after full match.
+  // The completing candle itself is skipped (return true); betting starts next.
+  if (g.pattern.length > 0) {
+    var tok = g.pattern[st.patPos];
+    if (tok === 'any' || tok === actual) {
+      st.patPos++;
+    } else {
+      st.patPos = 0;
+      var tok0 = g.pattern[0];
+      if (tok0 === 'any' || tok0 === actual) st.patPos = 1;
+    }
+    if (st.patPos >= g.pattern.length) {
+      st.active = true; st.wins = 0; st.patPos = 0; st.sw = g.stopWins;
+    }
   }
-  return true;
+
+  return true;  // still idle — skip this candle
 }
-// Run after a winning bet while ACTIVE. Counts the win and returns true when
-// the win quota is reached, at which point the gate goes back to IDLE (the
-// caller resets the ladder / cooldown so the next streak starts fresh).
+// Run after a winning bet while ACTIVE. Uses st.sw (set at activation time)
+// so time-entry and streak-entry can have independent stop-wins counts.
 function gateWin(g, st) {
   if (!g.on || !st.active) return false;
   st.wins++;
-  if (st.wins >= g.stopWins) { st.active = false; st.patPos = 0; return true; }
+  if (st.wins >= st.sw) { st.active = false; st.patPos = 0; return true; }
   return false;
 }
 
@@ -877,8 +964,8 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
         if (!prevRes) { prevRes = actual; continue; }
       }
 
-      // Streak gate: stay idle until a qualifying streak appears
-      if (gateIdle(g, gst, actual)) {
+      // Gate: stay idle until time/streak condition met
+      if (gateIdle(g, gst, actual, row.time)) {
         overlaysMap[row.time][di] = { skipped: true, idle: true };
         prevRes = actual;
         continue;
@@ -998,7 +1085,7 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
         if (!prevRes) { prevRes = actual; continue; }
       }
 
-      if (gateIdle(g, gst, actual)) {
+      if (gateIdle(g, gst, actual, row.time)) {
         overlaysMap[row.time][di] = { skipped: true, idle: true };
         prevRes = actual;
         continue;
@@ -1129,23 +1216,42 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
   //   so no man bets on the candle immediately after the pattern. Tagged -1.
   var activePts = [];
   if (g.on) {
-    var _overlap = g.allMen ? 0 : patternOverlap(g.pattern);
-    var _gPre = { patPos: 0 };
-    for (var i = 0; i < allEvents.length; i++) {
-      var _tok = g.pattern[_gPre.patPos];
-      var _act = allEvents[i].actual;
-      if (_tok === 'any' || _tok === _act) {
-        _gPre.patPos++;
-      } else {
-        _gPre.patPos = 0;
-        var _tok0 = g.pattern[0];
-        if (_tok0 === 'any' || _tok0 === _act) _gPre.patPos = 1;
-      }
-      if (_gPre.patPos >= g.pattern.length) {
-        activePts.push({ idx: i, man: g.allMen ? -1 : i % numMen });
-        _gPre.patPos = _overlap; // overlapping for owner mode, 0 for all-men
+    // Pattern (streak) activation points
+    if (g.pattern.length > 0) {
+      var _overlap = g.allMen ? 0 : patternOverlap(g.pattern);
+      var _gPre = { patPos: 0 };
+      for (var i = 0; i < allEvents.length; i++) {
+        var _tok = g.pattern[_gPre.patPos];
+        var _act = allEvents[i].actual;
+        if (_tok === 'any' || _tok === _act) {
+          _gPre.patPos++;
+        } else {
+          _gPre.patPos = 0;
+          var _tok0 = g.pattern[0];
+          if (_tok0 === 'any' || _tok0 === _act) _gPre.patPos = 1;
+        }
+        if (_gPre.patPos >= g.pattern.length) {
+          // atSelf:false → betting starts on the NEXT candle (completing candle skipped)
+          activePts.push({ idx: i, man: g.allMen ? -1 : i % numMen, atSelf: false, sw: g.stopWins });
+          _gPre.patPos = _overlap;
+        }
       }
     }
+    // Time entry activation points: bet starts ON the selected candle (atSelf:true)
+    if (g.times.length > 0) {
+      for (var i = 0; i < allEvents.length; i++) {
+        var _t = allEvents[i].time;
+        for (var ti = 0; ti < g.times.length; ti++) {
+          if (g.times[ti] === _t) {
+            // Each selected time slot fires its own session for the owning man
+            activePts.push({ idx: i, man: i % numMen, atSelf: true, sw: g.timeStopWins });
+            break;
+          }
+        }
+      }
+    }
+    // Sort combined list by index so per-man scan stays in order
+    activePts.sort(function(a, b) { return a.idx - b.idx; });
   }
 
   // Distribute round-robin to each man
@@ -1163,6 +1269,7 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
     var manActive  = !g.on;   // true from the start when gate is off
     var manWins    = 0;
     var activePtIdx = 0;      // index into activePts for the next trigger
+    var manSw       = 1;      // effective stop-wins for the current session
     var events = manEvents[m];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
@@ -1174,21 +1281,39 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
 
       // Gate: check whether this man should become active.
       //
-      // "All men" mode: any activation point triggers all men. Men start
-      //   betting once their event index >= activation index + numMen, which
-      //   skips the completing candle AND the candle immediately after for all.
-      //
-      // "Owner only" mode (overlapping pre-pass): skip activations for other
-      //   men; only respond to the one tagged to this man (ev.idx > ap.idx).
+      // activePts entries have:
+      //   atSelf:false (streak gate) → bet starts NEXT candle (ev.idx > ap.idx)
+      //   atSelf:true  (time entry)  → bet starts ON this candle (ev.idx >= ap.idx)
+      //   man:-1 (allMen streak)     → all men trigger at idx + numMen offset
+      //   sw: per-session stop-wins
       if (g.on && !manActive) {
-        if (g.allMen) {
-          if (activePtIdx < activePts.length && ev.idx >= activePts[activePtIdx].idx + numMen) {
-            manActive = true; manWins = 0; activePtIdx++;
+        if (g.allMen && activePts.length > 0 && activePts[0].man === -1) {
+          // All-men streak mode: advance past consumed points
+          while (activePtIdx < activePts.length && activePts[activePtIdx].man === -1 &&
+                 ev.idx > activePts[activePtIdx].idx + numMen) {
+            activePtIdx++;
+          }
+          if (activePtIdx < activePts.length && activePts[activePtIdx].man === -1 &&
+              ev.idx >= activePts[activePtIdx].idx + numMen) {
+            manSw = activePts[activePtIdx].sw; manActive = true; manWins = 0; activePtIdx++;
           }
         } else {
-          while (activePtIdx < activePts.length && activePts[activePtIdx].man !== m) activePtIdx++;
-          if (activePtIdx < activePts.length && ev.idx > activePts[activePtIdx].idx) {
-            manActive = true; manWins = 0; activePtIdx++;
+          // Owner-only (streak) or time-entry: find the next activation point for this man.
+          // For time-entry (atSelf:true) we also skip past slots we've overshot while active.
+          while (activePtIdx < activePts.length) {
+            var _ap0 = activePts[activePtIdx];
+            if (_ap0.man !== m) { activePtIdx++; continue; }
+            if (_ap0.atSelf && ev.idx > _ap0.idx) { activePtIdx++; continue; } // slot passed
+            break;
+          }
+          if (activePtIdx < activePts.length) {
+            var ap = activePts[activePtIdx];
+            // atSelf:true → activate when we ARE on this candle (ev.idx === ap.idx guaranteed by loop above)
+            // atSelf:false → activate on the candle AFTER (>)
+            var shouldActivate = ap.atSelf ? (ev.idx >= ap.idx) : (ev.idx > ap.idx);
+            if (shouldActivate) {
+              manSw = ap.sw; manActive = true; manWins = 0; activePtIdx++;
+            }
           }
         }
         if (!manActive) {
@@ -1229,10 +1354,10 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         slotMap[ev.time].wins++;
         step = 0;
         cdLeft = cooldown;
-        // Gate win counting: each man independently exits after stopWins
+        // Gate win counting: each man independently exits after manSw wins
         if (g.on && manActive) {
           manWins++;
-          if (manWins >= g.stopWins) { manActive = false; cdLeft = 0; }
+          if (manWins >= manSw) { manActive = false; cdLeft = 0; }
         }
         if (strategy === 'custom') {
           patternPos = customResetPattern ? 0 : patternPos + 1;
@@ -1339,7 +1464,7 @@ function simulateCombined(mode, ladder, buyPrice, cooldown, numMen, gate) {
       for (var ri = 0; ri < ROWS.length; ri++) {
         var row = ROWS[ri], actual = row.cells[di];
         if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
-        if (gateIdle(g, gst, actual)) { overlaysMap[row.time][di] = { skipped: true, idle: true }; continue; }
+        if (gateIdle(g, gst, actual, row.time)) { overlaysMap[row.time][di] = { skipped: true, idle: true }; continue; }
         if (cdLeft > 0) { overlaysMap[row.time][di] = { skipped: true }; cdLeft--; continue; }
         var res = playCandle(actual, stepUp, stepDown, row.time);
         stepUp = res.stepUp; stepDown = res.stepDown;
@@ -1353,7 +1478,7 @@ function simulateCombined(mode, ladder, buyPrice, cooldown, numMen, gate) {
       for (var di = 0; di < DATES.length; di++) {
         var actual = row.cells[di];
         if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
-        if (gateIdle(g, gst, actual)) { overlaysMap[row.time][di] = { skipped: true, idle: true }; continue; }
+        if (gateIdle(g, gst, actual, row.time)) { overlaysMap[row.time][di] = { skipped: true, idle: true }; continue; }
         if (cdLeft > 0) { overlaysMap[row.time][di] = { skipped: true }; cdLeft--; continue; }
         var res = playCandle(actual, stepUp, stepDown, row.time);
         stepUp = res.stepUp; stepDown = res.stepDown;
@@ -1376,7 +1501,7 @@ function simulateCombined(mode, ladder, buyPrice, cooldown, numMen, gate) {
       var stepUp = 0, stepDown = 0, cdLeft = 0, gst = gateState(g), events = manEvents[m];
       for (var i = 0; i < events.length; i++) {
         var ev = events[i];
-        if (gateIdle(g, gst, ev.actual)) { overlaysMap[ev.time][ev.di] = { skipped: true, idle: true, man: m+1 }; continue; }
+        if (gateIdle(g, gst, ev.actual, ev.time)) { overlaysMap[ev.time][ev.di] = { skipped: true, idle: true, man: m+1 }; continue; }
         if (cdLeft > 0) { overlaysMap[ev.time][ev.di] = { skipped: true, man: m+1 }; cdLeft--; continue; }
         var res = playCandle(ev.actual, stepUp, stepDown, ev.time);
         stepUp = res.stepUp; stepDown = res.stepDown;
@@ -1422,7 +1547,16 @@ function runAllSims() {
   var stopWins   = parseInt(document.getElementById('stopWinsIn').value, 10);
   if (isNaN(stopWins)   || stopWins   < 1) stopWins = 1;
   var streakAllMen = document.getElementById('streakAllMenIn').checked;
-  var gate = { pattern: streakPattern, stopWins: stopWins, allMen: streakAllMen };
+
+  // Time entry gate
+  var selectedTimes = [];
+  var timeChips = document.querySelectorAll('#timeEntryChips .time-chip.selected');
+  for (var _ci = 0; _ci < timeChips.length; _ci++) selectedTimes.push(timeChips[_ci].dataset.time);
+  var timeStopWins = parseInt(document.getElementById('timeStopWinsIn').value, 10);
+  if (isNaN(timeStopWins) || timeStopWins < 1) timeStopWins = 1;
+
+  var gate = { pattern: streakPattern, stopWins: stopWins, allMen: streakAllMen,
+               times: selectedTimes, timeStopWins: timeStopWins };
 
   var mode = document.querySelector('input[name="simMode"]:checked').value;
   var customPattern = parseCustomPattern();
