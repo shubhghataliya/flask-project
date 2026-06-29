@@ -1255,27 +1255,21 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         }
       }
     }
-    // Time entry activation points: bet starts ON the selected candle (atSelf:true)
-    if (g.times.length > 0) {
-      for (var i = 0; i < allEvents.length; i++) {
-        var _t = allEvents[i].time;
-        for (var ti = 0; ti < g.times.length; ti++) {
-          if (g.times[ti] === _t) {
-            // Each selected time slot fires its own session for the owning man
-            activePts.push({ idx: i, man: i % numMen, atSelf: true, sw: g.timeStopWins });
-            break;
-          }
-        }
-      }
-    }
-    // Sort combined list by index so per-man scan stays in order
-    activePts.sort(function(a, b) { return a.idx - b.idx; });
+    // Time-entry is NOT in activePts — it is handled inline per-candle in the per-man loop
+    // so it can force-restart any in-progress session and always fires at every selected slot.
   }
 
   // Distribute round-robin to each man
   var manEvents = [];
   for (var m = 0; m < numMen; m++) manEvents.push([]);
   for (var i = 0; i < allEvents.length; i++) manEvents[i % numMen].push(allEvents[i]);
+
+  // teSlotMap: tracks wins/losses/busts attributed to the TIME SLOT that triggered each
+  // session (not the slot where the bet lands). Populated only for time-entry activations.
+  var teSlotMap = {};
+  for (var ti = 0; ti < g.times.length; ti++) {
+    teSlotMap[g.times[ti]] = { pnl: 0, bets: 0, wins: 0, busts: 0 };
+  }
 
   // Simulate each man independently.
   // Gate: each man tracks which activation point they are waiting for (activePtIdx).
@@ -1286,8 +1280,9 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
     var step       = 0, prevRes = null, cdLeft = 0, patternPos = 0;
     var manActive  = !g.on;   // true from the start when gate is off
     var manWins    = 0;
-    var activePtIdx = 0;      // index into activePts for the next trigger
-    var manSw       = 1;      // effective stop-wins for the current session
+    var activePtIdx     = 0;      // index into activePts for the next trigger
+    var manSw           = 1;      // effective stop-wins for the current session
+    var manActivatingTime = null; // time slot that triggered this session (time-entry only)
     var events = manEvents[m];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
@@ -1297,41 +1292,38 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         if (!prevRes) { prevRes = actual; continue; }
       }
 
-      // Gate: check whether this man should become active.
-      //
-      // activePts entries have:
-      //   atSelf:false (streak gate) → bet starts NEXT candle (ev.idx > ap.idx)
-      //   atSelf:true  (time entry)  → bet starts ON this candle (ev.idx >= ap.idx)
-      //   man:-1 (allMen streak)     → all men trigger at idx + numMen offset
-      //   sw: per-session stop-wins
-      if (g.on && !manActive) {
+      // ── Gate ──────────────────────────────────────────────────────────────
+      // Time-entry is checked FIRST and always fires — it force-restarts any
+      // in-progress session so each selected time slot is always independent.
+      var _isTimeEntry = false;
+      if (g.times.length > 0) {
+        for (var _ti2 = 0; _ti2 < g.times.length; _ti2++) {
+          if (g.times[_ti2] === ev.time) { _isTimeEntry = true; break; }
+        }
+      }
+      if (_isTimeEntry) {
+        // Force-start a fresh session: reset ladder, cooldown, and win count
+        step = 0; cdLeft = 0; patternPos = 0;
+        manActive = true; manWins = 0; manSw = g.timeStopWins;
+        manActivatingTime = ev.time;
+        // Fall through — bet on this candle (no skip)
+      } else if (g.on && !manActive) {
+        // Pattern (streak) gate: activate via activePts
         if (g.allMen && activePts.length > 0 && activePts[0].man === -1) {
-          // All-men streak mode: advance past consumed points
           while (activePtIdx < activePts.length && activePts[activePtIdx].man === -1 &&
                  ev.idx > activePts[activePtIdx].idx + numMen) {
             activePtIdx++;
           }
           if (activePtIdx < activePts.length && activePts[activePtIdx].man === -1 &&
               ev.idx >= activePts[activePtIdx].idx + numMen) {
-            manSw = activePts[activePtIdx].sw; manActive = true; manWins = 0; activePtIdx++;
+            manSw = activePts[activePtIdx].sw; manActive = true; manWins = 0;
+            manActivatingTime = null; activePtIdx++;
           }
         } else {
-          // Owner-only (streak) or time-entry: find the next activation point for this man.
-          // For time-entry (atSelf:true) we also skip past slots we've overshot while active.
-          while (activePtIdx < activePts.length) {
-            var _ap0 = activePts[activePtIdx];
-            if (_ap0.man !== m) { activePtIdx++; continue; }
-            if (_ap0.atSelf && ev.idx > _ap0.idx) { activePtIdx++; continue; } // slot passed
-            break;
-          }
-          if (activePtIdx < activePts.length) {
-            var ap = activePts[activePtIdx];
-            // atSelf:true → activate when we ARE on this candle (ev.idx === ap.idx guaranteed by loop above)
-            // atSelf:false → activate on the candle AFTER (>)
-            var shouldActivate = ap.atSelf ? (ev.idx >= ap.idx) : (ev.idx > ap.idx);
-            if (shouldActivate) {
-              manSw = ap.sw; manActive = true; manWins = 0; activePtIdx++;
-            }
+          while (activePtIdx < activePts.length && activePts[activePtIdx].man !== m) activePtIdx++;
+          if (activePtIdx < activePts.length && ev.idx > activePts[activePtIdx].idx) {
+            manSw = activePts[activePtIdx].sw; manActive = true; manWins = 0;
+            manActivatingTime = null; activePtIdx++;
           }
         }
         if (!manActive) {
@@ -1370,12 +1362,18 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         grandStepWins[curStep]++;
         slotMap[ev.time].pnl += winProfit;
         slotMap[ev.time].wins++;
+        // Attribute to the time-entry session that opened this activation
+        if (manActivatingTime && teSlotMap[manActivatingTime]) {
+          teSlotMap[manActivatingTime].pnl += winProfit;
+          teSlotMap[manActivatingTime].wins++;
+          teSlotMap[manActivatingTime].bets++;
+        }
         step = 0;
         cdLeft = cooldown;
         // Gate win counting: each man independently exits after manSw wins
         if (g.on && manActive) {
           manWins++;
-          if (manWins >= manSw) { manActive = false; cdLeft = 0; }
+          if (manWins >= manSw) { manActive = false; cdLeft = 0; manActivatingTime = null; }
         }
         if (strategy === 'custom') {
           patternPos = customResetPattern ? 0 : patternPos + 1;
@@ -1389,6 +1387,12 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         if (step >= ladder.length - 1) {
           bust = true; grandBusts++;
           slotMap[ev.time].busts++;
+          // Attribute to the time-entry session
+          if (manActivatingTime && teSlotMap[manActivatingTime]) {
+            teSlotMap[manActivatingTime].pnl -= betAmt;
+            teSlotMap[manActivatingTime].busts++;
+            teSlotMap[manActivatingTime].bets++;
+          }
           step = 0;
           if (strategy === 'custom') {
             patternPos = customResetPattern ? 0 : patternPos + 1;
@@ -1396,6 +1400,11 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
             patternPos = 0;
           }
         } else {
+          // Attribute loss to the time-entry session
+          if (manActivatingTime && teSlotMap[manActivatingTime]) {
+            teSlotMap[manActivatingTime].pnl -= betAmt;
+            teSlotMap[manActivatingTime].bets++;
+          }
           step++;
           if (strategy === 'custom') patternPos++;
         }
@@ -1409,7 +1418,7 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
   for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
   return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
            grandSteps: grandSteps, grandStepWins: grandStepWins,
-           slotResults: slotResults, overlaysMap: overlaysMap, numMen: numMen,
+           slotResults: slotResults, teSlotMap: teSlotMap, overlaysMap: overlaysMap, numMen: numMen,
            customPattern: customPattern,
            customResetPattern: customResetPattern };
 }
@@ -1698,7 +1707,7 @@ function showAnalytics(strat, noScroll) {
 
   renderDetailCards(r.grandPnl, r.grandBusts, r.grandBets, r.grandWins, currentLadder, r.grandMDs);
   renderBars(r.grandSteps, r.grandStepWins, currentLadder);
-  renderTimeEntryBreakdown(r.slotResults);
+  renderTimeEntryBreakdown(r);
   renderIstSection(r.slotResults, r.overlaysMap, r.bandMDs, r.dowMDs);
   renderSlotTable(r.slotResults, currentLadder);
   renderBustList(r.overlaysMap);
@@ -2021,28 +2030,40 @@ function computeDailyBandPnl(overlaysMap) {
 var _teBreakdownData = [];  // [{time, pnl, bets, wins, busts}] — last render data
 var _teSortedByPnl   = false;
 
-function renderTimeEntryBreakdown(slotResults) {
+function renderTimeEntryBreakdown(r) {
   var section = document.getElementById('timeEntryBreakdownSection');
-  var grid    = document.getElementById('teBreakdownGrid');
   var meta    = document.getElementById('teBreakdownMeta');
 
   // Collect selected times
   var selectedChips = document.querySelectorAll('#timeEntryChips .time-chip.selected');
-  if (!selectedChips.length || !slotResults) { section.style.display = 'none'; return; }
+  if (!selectedChips.length) { section.style.display = 'none'; return; }
 
-  var selSet = {};
-  for (var i = 0; i < selectedChips.length; i++) selSet[selectedChips[i].dataset.time] = true;
-
-  // Build data list from slotResults for selected times only
   _teBreakdownData = [];
-  for (var ri = 0; ri < slotResults.length; ri++) {
-    var sr = slotResults[ri];
-    if (!selSet[sr.time]) continue;
-    _teBreakdownData.push({ time: sr.time, pnl: sr.pnl, bets: sr.total, wins: sr.wins, busts: sr.busts });
+
+  if (r.teSlotMap && Object.keys(r.teSlotMap).length > 0) {
+    // Men-based: use teSlotMap — results are attributed to the SESSION-STARTING slot, not bet-landing slot.
+    // This gives clean per-slot numbers even when multiple slots are selected.
+    for (var t in r.teSlotMap) {
+      var ts = r.teSlotMap[t];
+      _teBreakdownData.push({ time: t, pnl: ts.pnl, bets: ts.bets, wins: ts.wins, busts: ts.busts });
+    }
+    meta.textContent = _teBreakdownData.length + ' slots — session-attributed';
+  } else {
+    // Simple / Daywise: use slotResults filtered to selected slots
+    var selSet = {};
+    for (var i = 0; i < selectedChips.length; i++) selSet[selectedChips[i].dataset.time] = true;
+    if (!r.slotResults) { section.style.display = 'none'; return; }
+    for (var ri = 0; ri < r.slotResults.length; ri++) {
+      var sr = r.slotResults[ri];
+      if (!selSet[sr.time]) continue;
+      _teBreakdownData.push({ time: sr.time, pnl: sr.pnl, bets: sr.total, wins: sr.wins, busts: sr.busts });
+    }
+    meta.textContent = _teBreakdownData.length + ' slots selected';
   }
 
+  if (!_teBreakdownData.length) { section.style.display = 'none'; return; }
+
   _teSortedByPnl = false;
-  meta.textContent = _teBreakdownData.length + ' slots selected';
   section.style.display = 'block';
   _teRenderGrid();
 }
