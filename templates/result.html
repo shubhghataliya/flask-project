@@ -446,6 +446,29 @@
                 </label>
               </div>
             </div>
+
+            <!-- Cocktail Strategy Builder -->
+            <div class="col-12">
+              <div style="border:1px solid #21262d;border-radius:10px;padding:12px 14px;background:#0d1117">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                  <label class="form-label" style="margin:0">
+                    Cocktail Strategy
+                    <span style="font-weight:400;text-transform:none">
+                      — mix strategies in sequence; advances to the next segment after each completed win or bust
+                    </span>
+                  </label>
+                  <button type="button" onclick="addCocktailSegment()"
+                    style="font-size:.7rem;padding:3px 10px;border-radius:4px;border:1px solid #388bfd;background:rgba(31,111,235,.15);color:#79c0ff;cursor:pointer;white-space:nowrap">
+                    + Add Segment
+                  </button>
+                </div>
+                <div id="cocktailSegments" style="display:flex;flex-direction:column;gap:5px"></div>
+                <div style="font-size:.68rem;color:#484f58;margin-top:6px">
+                  Cycles endlessly. Each segment's count = number of completed Martingale sequences (win <em>or</em> bust) before switching.
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -622,6 +645,57 @@ var DATES     = {{ dates     | tojson }};
 var DATES_ISO = {{ dates_iso | tojson }};
 var ROWS      = {{ rows      | tojson }};
 
+// ─── Cocktail segment builder ─────────────────────────────────────────────────
+var CQ_STRAT_OPTIONS = [
+  ['all_up','All Up'], ['all_down','All Down'], ['same','Same as Result'],
+  ['opposite','Opposite'], ['interlock_opposite','Interlock Opposite'],
+  ['interlock_same','Interlock Same'], ['custom','Custom Pattern']
+];
+function addCocktailSegment(strat, count) {
+  var container = document.getElementById('cocktailSegments');
+  var div = document.createElement('div');
+  div.className = 'cocktail-segment';
+  div.style.cssText = 'display:flex;align-items:center;gap:8px';
+  var opts = CQ_STRAT_OPTIONS.map(function(o) {
+    return '<option value="' + o[0] + '">' + o[1] + '</option>';
+  }).join('');
+  div.innerHTML =
+    '<span class="cq-idx" style="color:#484f58;font-size:.7rem;min-width:18px;text-align:right"></span>' +
+    '<select class="cq-strat form-select form-select-sm" style="width:178px;background:#0d1117;border-color:#30363d;color:#c9d1d9">' + opts + '</select>' +
+    '<span style="color:#484f58;font-size:.75rem">×</span>' +
+    '<input class="cq-count form-control form-control-sm" type="number" value="' + (count || 2) + '" min="1" max="99" style="width:68px;background:#0d1117;border-color:#30363d;color:#c9d1d9">' +
+    '<span style="color:#8b949e;font-size:.68rem;white-space:nowrap">wins / busts</span>' +
+    '<button type="button" onclick="removeCocktailSegment(this)" style="background:none;border:none;color:#f85149;font-size:1rem;cursor:pointer;padding:0 4px;line-height:1;margin-left:auto">×</button>';
+  if (strat) div.querySelector('.cq-strat').value = strat;
+  container.appendChild(div);
+  _cqUpdateIndices();
+}
+function removeCocktailSegment(btn) {
+  btn.closest('.cocktail-segment').remove();
+  _cqUpdateIndices();
+}
+function _cqUpdateIndices() {
+  var segs = document.querySelectorAll('.cocktail-segment');
+  for (var i = 0; i < segs.length; i++)
+    segs[i].querySelector('.cq-idx').textContent = (i + 1) + '.';
+}
+function parseCocktailSeq() {
+  var segs = document.querySelectorAll('.cocktail-segment');
+  var seq = [];
+  for (var i = 0; i < segs.length; i++) {
+    var s = segs[i].querySelector('.cq-strat').value;
+    var c = parseInt(segs[i].querySelector('.cq-count').value, 10);
+    if (s && c >= 1) seq.push({ strategy: s, count: c });
+  }
+  return seq;
+}
+// Default cocktail: 2× All Up → 2× All Down → 1× Same
+(function() {
+  addCocktailSegment('all_up',   2);
+  addCocktailSegment('all_down', 2);
+  addCocktailSegment('same',     1);
+})();
+
 // ─── Populate Time Entry chips from ROWS ───
 function applyChipState(chip, on) {
   if (on) { chip.classList.add('selected'); }
@@ -691,8 +765,8 @@ function toggleTimeFormat() {
   });
 }
 
-var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'interlock_same', 'custom', 'combined'];
-var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', interlock_opposite: 'Interlock Opposite', interlock_same: 'Interlock Same', custom: 'Custom Pattern', combined: 'Combined' };
+var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'interlock_same', 'custom', 'combined', 'cocktail'];
+var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', interlock_opposite: 'Interlock Opposite', interlock_same: 'Interlock Same', custom: 'Custom Pattern', combined: 'Combined', cocktail: 'Cocktail' };
 var STRAT_DESCS  = {
   all_up:    'Always bet Up on every candle',
   all_down:  'Always bet Down on every candle',
@@ -701,7 +775,8 @@ var STRAT_DESCS  = {
   interlock_opposite: 'Fade the immediately-preceding candle in the shared timeline. In Men-Based mode each man fades the candle the previous man just played while running his own ladder; reduces to Opposite in other modes.',
   interlock_same: 'Follow the immediately-preceding candle in the shared timeline. In Men-Based mode each man copies the candle the previous man just played while running his own ladder; reduces to Same as Result in other modes.',
   custom:    'Use a custom Up/Down pattern for each bet sequence.',
-  combined:  'Bet both Up and Down simultaneously on every candle with independent ladder step counters.'
+  combined:  'Bet both Up and Down simultaneously on every candle with independent ladder step counters.',
+  cocktail:  'Mix strategies in sequence: cycle through user-defined segments (e.g. 2× All Up → 2× All Down → 1× Same), advancing to the next segment after each completed win or bust.'
 };
 var STRAT_SHORT  = {
   all_up:             'Always Up',
@@ -711,7 +786,8 @@ var STRAT_SHORT  = {
   interlock_opposite: 'Fade interlock',
   interlock_same:     'Follow interlock',
   custom:             'Custom pattern',
-  combined:           'Dual direction'
+  combined:           'Dual direction',
+  cocktail:           'Mixed sequence'
 };
 
 var allSimResults = {};
@@ -862,6 +938,32 @@ function fmtMDs(mds) { mds = mds || [0,0]; return 'MD1 ' + fmtMD(mds[0]) + ' · 
 // trigger; 0 disables that direction). Once triggered it becomes ACTIVE
 // and bets normally until it books `stopWins` wins, then it goes back to
 // IDLE and waits for the next qualifying streak. When the gate is off
+// ─────────────────────────────────────────────────────────────────
+// COCKTAIL HELPERS
+// seq = [{strategy, count}, ...] where count = number of completed
+// Martingale sequences (win OR bust) before switching to next segment.
+// ─────────────────────────────────────────────────────────────────
+function cqNewState()           { return { segIdx: 0, segCount: 0 }; }
+function cqGetStrat(st, seq)    { return (seq && seq.length) ? seq[st.segIdx % seq.length].strategy : 'all_up'; }
+function cqAdvance(st, seq) {
+  if (!seq || !seq.length) return;
+  st.segCount++;
+  if (st.segCount >= seq[st.segIdx % seq.length].count) {
+    st.segIdx = (st.segIdx + 1) % seq.length;
+    st.segCount = 0;
+  }
+}
+// Resolve betDir for cocktail. gprev = global-prev result (men-based only, else pass prevRes).
+function cqBetDir(st, seq, prevRes, gprev, customPat, patPos) {
+  var s = cqGetStrat(st, seq);
+  if (s === 'all_up')             return 'Up';
+  if (s === 'all_down')           return 'Down';
+  if (s === 'same'             || s === 'interlock_same')     return gprev || prevRes;
+  if (s === 'opposite'         || s === 'interlock_opposite') return ((gprev || prevRes) === 'Up') ? 'Down' : 'Up';
+  if (s === 'custom' && customPat && customPat.length)        return customPat[patPos % customPat.length];
+  return 'Up';
+}
+
 // (both thresholds 0) the session is active from the start = old behaviour.
 // ─────────────────────────────────────────────────────────────────
 function gateCfg(gate) {
@@ -947,7 +1049,7 @@ function gateWin(g, st) {
 // same time slot (e.g. at 12AM Jan 3 you look at 12AM Jan 2).
 // First date of each slot is skipped (no prior reference).
 // ─────────────────────────────────────────────────────────────────
-function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, customResetPattern, gate) {
+function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, customResetPattern, gate, cocktailSeq) {
   buyPrice = buyPrice || 0.50;
   cooldown = cooldown || 0;
   var g = gateCfg(gate);
@@ -970,26 +1072,25 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
     var row        = ROWS[ri];
     var step       = 0;
     var prevRes    = null;
-    var cdLeft     = 0;   // cooldown counter per slot
+    var cdLeft     = 0;
     var patternPos = 0;
-    var gst        = gateState(g);  // streak gate state per slot
+    var gst        = gateState(g);
+    var cqSt       = (strategy === 'cocktail') ? cqNewState() : null;
 
     for (var di = 0; di < DATES.length; di++) {
       var actual = row.cells[di];
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
 
-      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite' || strategy === 'interlock_same') {
+      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite' || strategy === 'interlock_same' || strategy === 'cocktail') {
         if (!prevRes) { prevRes = actual; continue; }
       }
 
-      // Gate: stay idle until time/streak condition met
       if (gateIdle(g, gst, actual, row.time)) {
         overlaysMap[row.time][di] = { skipped: true, idle: true };
         prevRes = actual;
         continue;
       }
 
-      // Cooldown: skip bet, update prevRes, decrement counter
       if (cdLeft > 0) {
         overlaysMap[row.time][di] = { skipped: true };
         prevRes = actual;
@@ -998,7 +1099,9 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
       }
 
       var betDir;
-      if      (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
+      if (strategy === 'cocktail') {
+        betDir = cqBetDir(cqSt, cocktailSeq, prevRes, prevRes, customPattern, patternPos);
+      } else if (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
       else if (strategy === 'all_up')   { betDir = 'Up'; }
       else if (strategy === 'all_down') { betDir = 'Down'; }
       else if (strategy === 'same' || strategy === 'interlock_same') { betDir = prevRes; }
@@ -1022,12 +1125,10 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
         slotMap[row.time].wins++;
         step = 0;
         cdLeft = cooldown;
-        if (gateWin(g, gst)) cdLeft = 0;  // win quota hit → go idle, drop cooldown
-        if (strategy === 'custom') {
-          patternPos = customResetPattern ? 0 : patternPos + 1;
-        } else {
-          patternPos = 0;
-        }
+        if (gateWin(g, gst)) cdLeft = 0;
+        if (strategy === 'cocktail') { cqAdvance(cqSt, cocktailSeq); patternPos = 0; }
+        else if (strategy === 'custom') { patternPos = customResetPattern ? 0 : patternPos + 1; }
+        else { patternPos = 0; }
       } else {
         grandPnl -= betAmt;
         slotMap[row.time].pnl -= betAmt;
@@ -1036,14 +1137,12 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
           bust = true; grandBusts++;
           slotMap[row.time].busts++;
           step = 0;
-          if (strategy === 'custom') {
-            patternPos = customResetPattern ? 0 : patternPos + 1;
-          } else {
-            patternPos = 0;
-          }
+          if (strategy === 'cocktail') { cqAdvance(cqSt, cocktailSeq); patternPos = 0; }
+          else if (strategy === 'custom') { patternPos = customResetPattern ? 0 : patternPos + 1; }
+          else { patternPos = 0; }
         } else {
           step++;
-          if (strategy === 'custom') patternPos++;
+          if (strategy === 'custom' || strategy === 'cocktail') patternPos++;
         }
       }
 
@@ -1067,7 +1166,7 @@ function simulateDaywise(strategy, ladder, buyPrice, cooldown, customPattern, cu
 // order: date-by-date, hour-by-hour within each date.
 // A loss at 12AM advances the step for the 1AM bet.
 // ─────────────────────────────────────────────────────────────────
-function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, customResetPattern, gate) {
+function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, customResetPattern, gate, cocktailSeq) {
   buyPrice = buyPrice || 0.50;
   cooldown = cooldown || 0;
   var g = gateCfg(gate);
@@ -1090,7 +1189,8 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
   var prevRes    = null;
   var cdLeft     = 0;
   var patternPos = 0;
-  var gst        = gateState(g);  // streak gate state (one continuous session)
+  var gst        = gateState(g);
+  var cqSt       = (strategy === 'cocktail') ? cqNewState() : null;
 
   for (var di = 0; di < DATES.length; di++) {
     for (var ri = 0; ri < ROWS.length; ri++) {
@@ -1099,7 +1199,7 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
 
       if (!actual || (actual !== 'Up' && actual !== 'Down')) continue;
 
-      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite' || strategy === 'interlock_same') {
+      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite' || strategy === 'interlock_same' || strategy === 'cocktail') {
         if (!prevRes) { prevRes = actual; continue; }
       }
 
@@ -1117,7 +1217,9 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
       }
 
       var betDir;
-      if      (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
+      if (strategy === 'cocktail') {
+        betDir = cqBetDir(cqSt, cocktailSeq, prevRes, prevRes, customPattern, patternPos);
+      } else if (strategy === 'custom')   { betDir = customPattern[patternPos % customPattern.length]; }
       else if (strategy === 'all_up')   { betDir = 'Up'; }
       else if (strategy === 'all_down') { betDir = 'Down'; }
       else if (strategy === 'same' || strategy === 'interlock_same') { betDir = prevRes; }
@@ -1141,12 +1243,10 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
         slotMap[row.time].wins++;
         step = 0;
         cdLeft = cooldown;
-        if (gateWin(g, gst)) cdLeft = 0;  // win quota hit → go idle, drop cooldown
-        if (strategy === 'custom') {
-          patternPos = customResetPattern ? 0 : patternPos + 1;
-        } else {
-          patternPos = 0;
-        }
+        if (gateWin(g, gst)) cdLeft = 0;
+        if (strategy === 'cocktail') { cqAdvance(cqSt, cocktailSeq); patternPos = 0; }
+        else if (strategy === 'custom') { patternPos = customResetPattern ? 0 : patternPos + 1; }
+        else { patternPos = 0; }
       } else {
         grandPnl -= betAmt;
         slotMap[row.time].pnl -= betAmt;
@@ -1155,14 +1255,12 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
           bust = true; grandBusts++;
           slotMap[row.time].busts++;
           step = 0;
-          if (strategy === 'custom') {
-            patternPos = customResetPattern ? 0 : patternPos + 1;
-          } else {
-            patternPos = 0;
-          }
+          if (strategy === 'cocktail') { cqAdvance(cqSt, cocktailSeq); patternPos = 0; }
+          else if (strategy === 'custom') { patternPos = customResetPattern ? 0 : patternPos + 1; }
+          else { patternPos = 0; }
         } else {
           step++;
-          if (strategy === 'custom') patternPos++;
+          if (strategy === 'custom' || strategy === 'cocktail') patternPos++;
         }
       }
 
@@ -1187,7 +1285,7 @@ function simulateSimple(strategy, ladder, buyPrice, cooldown, customPattern, cus
 // Man m receives candles m, m+N, m+2N, … (0-indexed).
 // Each man runs a completely independent Martingale on his subset.
 // ─────────────────────────────────────────────────────────────────
-function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPattern, customResetPattern, gate) {
+function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPattern, customResetPattern, gate, cocktailSeq) {
   buyPrice = buyPrice || 0.50;
   cooldown = cooldown || 0;
   var g = gateCfg(gate);
@@ -1278,17 +1376,18 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
   // Each man independently counts wins and goes back to idle after stopWins.
   for (var m = 0; m < numMen; m++) {
     var step       = 0, prevRes = null, cdLeft = 0, patternPos = 0;
-    var manActive  = !g.on;   // true from the start when gate is off
+    var manActive  = !g.on;
     var manWins    = 0;
-    var activePtIdx     = 0;      // index into activePts for the next trigger
-    var manSw           = 1;      // effective stop-wins for the current session
-    var manActivatingTime = null; // time slot that triggered this session (time-entry only)
+    var activePtIdx     = 0;
+    var manSw           = 1;
+    var manActivatingTime = null;
+    var cqSt       = (strategy === 'cocktail') ? cqNewState() : null;
     var events = manEvents[m];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
       var actual = ev.actual;
 
-      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite' || strategy === 'interlock_same') {
+      if (strategy === 'same' || strategy === 'opposite' || strategy === 'interlock_opposite' || strategy === 'interlock_same' || strategy === 'cocktail') {
         if (!prevRes) { prevRes = actual; continue; }
       }
 
@@ -1341,7 +1440,9 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
       }
 
       var betDir;
-      if      (strategy === 'custom')             { betDir = customPattern[patternPos % customPattern.length]; }
+      if (strategy === 'cocktail') {
+        betDir = cqBetDir(cqSt, cocktailSeq, prevRes, ev.gprev, customPattern, patternPos);
+      } else if (strategy === 'custom')             { betDir = customPattern[patternPos % customPattern.length]; }
       else if (strategy === 'all_up')             { betDir = 'Up'; }
       else if (strategy === 'all_down')           { betDir = 'Down'; }
       else if (strategy === 'same')               { betDir = prevRes; }
@@ -1375,11 +1476,9 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
           manWins++;
           if (manWins >= manSw) { manActive = false; cdLeft = 0; manActivatingTime = null; }
         }
-        if (strategy === 'custom') {
-          patternPos = customResetPattern ? 0 : patternPos + 1;
-        } else {
-          patternPos = 0;
-        }
+        if (strategy === 'cocktail') { cqAdvance(cqSt, cocktailSeq); patternPos = 0; }
+        else if (strategy === 'custom') { patternPos = customResetPattern ? 0 : patternPos + 1; }
+        else { patternPos = 0; }
       } else {
         grandPnl -= betAmt;
         slotMap[ev.time].pnl -= betAmt;
@@ -1387,20 +1486,16 @@ function simulateMenBased(strategy, ladder, numMen, buyPrice, cooldown, customPa
         if (step >= ladder.length - 1) {
           bust = true; grandBusts++;
           slotMap[ev.time].busts++;
-          // Attribute to the time-entry session
           if (manActivatingTime && teSlotMap[manActivatingTime]) {
             teSlotMap[manActivatingTime].pnl -= betAmt;
             teSlotMap[manActivatingTime].busts++;
             teSlotMap[manActivatingTime].bets++;
           }
           step = 0;
-          if (strategy === 'custom') {
-            patternPos = customResetPattern ? 0 : patternPos + 1;
-          } else {
-            patternPos = 0;
-          }
+          if (strategy === 'cocktail') { cqAdvance(cqSt, cocktailSeq); patternPos = 0; }
+          else if (strategy === 'custom') { patternPos = customResetPattern ? 0 : patternPos + 1; }
+          else { patternPos = 0; }
         } else {
-          // Attribute loss to the time-entry session
           if (manActivatingTime && teSlotMap[manActivatingTime]) {
             teSlotMap[manActivatingTime].pnl -= betAmt;
             teSlotMap[manActivatingTime].bets++;
@@ -1593,15 +1688,17 @@ function runAllSims() {
   }
   var customReset = document.getElementById('customResetPattern').checked;
 
+  var cocktailSeq = parseCocktailSeq();
+
   var engine;
   if (mode === 'menbased') {
     var numMen = parseInt(document.getElementById('menCount').value, 10);
     if (isNaN(numMen) || numMen < 2) { alert('Men-Based requires at least 2 men.'); return; }
-    engine = function(s, l) { return simulateMenBased(s, l, numMen, bp, cooldown, customPattern, customReset, gate); };
+    engine = function(s, l) { return simulateMenBased(s, l, numMen, bp, cooldown, customPattern, customReset, gate, cocktailSeq); };
   } else if (mode === 'daywise') {
-    engine = function(s, l) { return simulateDaywise(s, l, bp, cooldown, customPattern, customReset, gate); };
+    engine = function(s, l) { return simulateDaywise(s, l, bp, cooldown, customPattern, customReset, gate, cocktailSeq); };
   } else {
-    engine = function(s, l) { return simulateSimple(s, l, bp, cooldown, customPattern, customReset, gate); };
+    engine = function(s, l) { return simulateSimple(s, l, bp, cooldown, customPattern, customReset, gate, cocktailSeq); };
   }
 
   var combinedMode = mode, combinedMen = (mode === 'menbased') ? (parseInt(document.getElementById('menCount').value, 10) || 2) : 2;
