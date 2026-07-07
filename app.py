@@ -8,6 +8,8 @@ import threading
 import uuid
 import sqlite3
 import requests as req
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from io import StringIO
 from datetime import datetime
 from werkzeug.utils import secure_filename
@@ -98,6 +100,21 @@ MONTHS = {
 # ── Polymarket API config ─────────────────────────────────────────────────────
 POLYMARKET_BASE = "https://gamma-api.polymarket.com"
 REQUIRED_TITLE_SUBSTRING = "Up or Down"
+
+# Reused session: keeps the TCP/TLS connection alive across paged requests
+# (faster than opening a new connection per page) and automatically retries
+# transient upstream failures (502/503/504 Bad Gateway/timeouts, 429 rate
+# limit) with exponential backoff instead of blowing up the whole fetch job.
+_session = req.Session()
+_retry = Retry(
+    total=5,
+    backoff_factor=0.5,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=['GET'],
+)
+_adapter = HTTPAdapter(max_retries=_retry, pool_connections=10, pool_maxsize=10)
+_session.mount('https://', _adapter)
+_session.mount('http://', _adapter)
 
 TAG_CONFIG = {
     '5m':  {'tag_id': 102892, 'interval_minutes': 5},
@@ -240,7 +257,7 @@ def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=N
             else:
                 break   # range window collapsed — nothing left to fetch
 
-        resp = req.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
+        resp = _session.get(f"{POLYMARKET_BASE}/events", params=params, timeout=30)
         resp.raise_for_status()
         events = resp.json()
         if not events:
@@ -289,7 +306,7 @@ def fetch_markets_api(crypto, interval, count, job=None, start_dt=None, end_dt=N
             break
         cursor    = oldest
         cursor_ts = oldest_ts
-        time.sleep(0.2)
+        time.sleep(0.05)
 
     all_markets.sort(key=lambda m: m.get('endDate', ''), reverse=True)
     return all_markets[:count]
@@ -311,6 +328,10 @@ def _run_fetch_job(job_id, crypto, interval, count, start_dt=None, end_dt=None):
                          f"{crypto.upper()}_{interval}_live_{len(markets)}")
         job['fetched'] = len(markets)
         job['status'] = 'done'
+    except req.exceptions.RequestException as e:
+        job['status'] = 'error'
+        job['error'] = ('Polymarket API is temporarily unavailable (502/upstream error). '
+                        'Please wait a moment and try again.')
     except Exception as e:
         job['status'] = 'error'
         job['error'] = str(e)

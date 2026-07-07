@@ -469,6 +469,32 @@
               </div>
             </div>
 
+            <!-- Daily Dominant Settings -->
+            <div class="col-12">
+              <div style="border:1px solid #21262d;border-radius:10px;padding:12px 14px;background:#0d1117">
+                <label class="form-label d-block" style="margin-bottom:8px">
+                  Daily Dominant
+                  <span style="font-weight:400;text-transform:none">
+                    — analyse which side dominates each day, then enter near day-end and bet on it
+                  </span>
+                </label>
+                <div class="row g-3 align-items-end">
+                  <div class="col-auto">
+                    <label class="form-label d-block" style="font-size:.72rem">Wins per day (target)</label>
+                    <input class="form-control" type="number" id="dominantWinsIn" value="1" min="1" max="20" step="1" style="width:130px">
+                  </div>
+                  <div class="col">
+                    <div style="font-size:.72rem;color:#8b949e">
+                      Entry slot is auto-calculated: the latest slot where the betting man still has enough remaining slots for the full ladder (worst-case bust).
+                      Before entry, all results that day are counted — whichever side (Up or Down) appeared more is the bet direction.
+                      In Men-Based mode only the man who owns the entry slot bets; others are idle.
+                      <strong>Entry time shown on the strategy card after running.</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -765,8 +791,8 @@ function toggleTimeFormat() {
   });
 }
 
-var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'interlock_same', 'custom', 'combined', 'cocktail'];
-var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', interlock_opposite: 'Interlock Opposite', interlock_same: 'Interlock Same', custom: 'Custom Pattern', combined: 'Combined', cocktail: 'Cocktail' };
+var STRATS      = ['all_up', 'all_down', 'same', 'opposite', 'interlock_opposite', 'interlock_same', 'custom', 'combined', 'cocktail', 'dominant'];
+var STRAT_LABELS = { all_up: 'All Up', all_down: 'All Down', same: 'Same as Result', opposite: 'Opposite', interlock_opposite: 'Interlock Opposite', interlock_same: 'Interlock Same', custom: 'Custom Pattern', combined: 'Combined', cocktail: 'Cocktail', dominant: 'Daily Dominant' };
 var STRAT_DESCS  = {
   all_up:    'Always bet Up on every candle',
   all_down:  'Always bet Down on every candle',
@@ -776,7 +802,8 @@ var STRAT_DESCS  = {
   interlock_same: 'Follow the immediately-preceding candle in the shared timeline. In Men-Based mode each man copies the candle the previous man just played while running his own ladder; reduces to Same as Result in other modes.',
   custom:    'Use a custom Up/Down pattern for each bet sequence.',
   combined:  'Bet both Up and Down simultaneously on every candle with independent ladder step counters.',
-  cocktail:  'Mix strategies in sequence: cycle through user-defined segments (e.g. 2× All Up → 2× All Down → 1× Same), advancing to the next segment after each completed win or bust.'
+  cocktail:  'Mix strategies in sequence: cycle through user-defined segments (e.g. 2× All Up → 2× All Down → 1× Same), advancing to the next segment after each completed win or bust.',
+  dominant:  'Each day, count Up vs Down across all slots up to the auto-calculated entry point, then bet on the dominant side from that point using the full Martingale ladder. Entry is chosen so the man has exactly enough slots left to complete one full ladder.'
 };
 var STRAT_SHORT  = {
   all_up:             'Always Up',
@@ -787,7 +814,8 @@ var STRAT_SHORT  = {
   interlock_same:     'Follow interlock',
   custom:             'Custom pattern',
   combined:           'Dual direction',
-  cocktail:           'Mixed sequence'
+  cocktail:           'Mixed sequence',
+  dominant:           'Daily Dominant'
 };
 
 var allSimResults = {};
@@ -1036,6 +1064,115 @@ function gateWin(g, st) {
   st.wins++;
   if (st.wins >= st.sw) { st.active = false; st.patPos = 0; return true; }
   return false;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DAILY DOMINANT
+// Per-day strategy:
+//   1. Auto-calculate entry slot = latest slot where the betting
+//      man still has ladder.length own-slots remaining (numMen
+//      spacing).  With 96 slots, 4-step ladder, 2 men → slot 89
+//      (10:15 PM).
+//   2. Count Up vs Down in slots [0, entryRi-1] (analysis window).
+//   3. Bet in dominant direction from entryRi, stepping by numMen,
+//      until winTarget wins or a bust (or end of day).
+// numMen=1 for simple/daywise modes (bets are consecutive).
+// ─────────────────────────────────────────────────────────────────
+function simulateDominant(ladder, buyPrice, numMen, winTarget) {
+  buyPrice  = buyPrice  || 0.50;
+  numMen    = Math.max(1, numMen   || 1);
+  winTarget = Math.max(1, winTarget || 1);
+
+  var grandPnl = 0, grandBusts = 0, grandBets = 0, grandWins = 0;
+  var grandSteps = [], grandStepWins = [];
+  for (var i = 0; i < ladder.length; i++) { grandSteps.push(0); grandStepWins.push(0); }
+
+  var overlaysMap = {}, slotMap = {};
+  for (var ri = 0; ri < ROWS.length; ri++) {
+    var t = ROWS[ri].time;
+    var arr = [], stc = [];
+    for (var di = 0; di < DATES.length; di++) arr.push(null);
+    for (var si = 0; si < ladder.length; si++) stc.push(0);
+    overlaysMap[t] = arr;
+    slotMap[t] = { time: t, pnl: 0, busts: 0, wins: 0, losses: 0, total: 0, stepCts: stc };
+  }
+
+  var slotsPerDay = ROWS.length;
+  // Latest entry slot such that the betting man has enough own-slots for winTarget full
+  // ladder cycles in the worst case (all losses until last step, then win, repeated winTarget times).
+  // Total worst-case bets = winTarget * ladder.length
+  // Man's last slot: entryRi + (totalBets-1)*numMen <= slotsPerDay-1
+  var totalBetsWorstCase = winTarget * ladder.length;
+  var entryRi = slotsPerDay - 1 - (totalBetsWorstCase - 1) * numMen;
+  var entryTime = (entryRi > 0 && ROWS[entryRi]) ? ROWS[entryRi].time : '';
+
+  if (entryRi <= 0) {
+    var slotResults = [];
+    for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
+    return { grandPnl: 0, grandBusts: 0, grandBets: 0, grandWins: 0,
+             grandSteps: grandSteps, grandStepWins: grandStepWins,
+             slotResults: slotResults, overlaysMap: overlaysMap, numMen: numMen, entryTime: '' };
+  }
+
+  for (var di = 0; di < DATES.length; di++) {
+    // Analysis phase: count Up vs Down in slots [0, entryRi-1]
+    var upCount = 0, downCount = 0, lastRes = null;
+    for (var ri = 0; ri < entryRi; ri++) {
+      var r = ROWS[ri].cells[di];
+      if      (r === 'Up')   { upCount++;   lastRes = r; }
+      else if (r === 'Down') { downCount++; lastRes = r; }
+    }
+    // Dominant direction; tie-break by most recent result, then 'Up'
+    var betDir = upCount > downCount ? 'Up' : downCount > upCount ? 'Down' : (lastRes || 'Up');
+
+    // Betting phase: entry at entryRi, step by numMen
+    var step = 0, dayWins = 0, activeBetRi = entryRi, done = false;
+    for (var ri = entryRi; ri < slotsPerDay; ri++) {
+      if (done || ri !== activeBetRi) {
+        overlaysMap[ROWS[ri].time][di] = { skipped: true, idle: true };
+        continue;
+      }
+      var actual = ROWS[ri].cells[di];
+      if (!actual || (actual !== 'Up' && actual !== 'Down')) {
+        overlaysMap[ROWS[ri].time][di] = { skipped: true };
+        activeBetRi += numMen;
+        continue;
+      }
+      var betAmt = ladder[step], curStep = step;
+      grandSteps[curStep]++; grandBets++;
+      slotMap[ROWS[ri].time].stepCts[curStep]++;
+      slotMap[ROWS[ri].time].total++;
+      var won = (betDir === actual);
+      var winProfit = betAmt * (1 - buyPrice) / buyPrice;
+      var bust = false;
+      if (won) {
+        grandPnl += winProfit; grandWins++; grandStepWins[curStep]++;
+        slotMap[ROWS[ri].time].pnl  += winProfit;
+        slotMap[ROWS[ri].time].wins++;
+        dayWins++; step = 0;
+        if (dayWins >= winTarget) done = true;
+      } else {
+        grandPnl -= betAmt;
+        slotMap[ROWS[ri].time].pnl -= betAmt;
+        slotMap[ROWS[ri].time].losses++;
+        if (step >= ladder.length - 1) {
+          bust = true; grandBusts++;
+          slotMap[ROWS[ri].time].busts++;
+          step = 0; done = true;
+        } else {
+          step++;
+        }
+      }
+      overlaysMap[ROWS[ri].time][di] = { won: won, bust: bust, bet: betAmt, winProfit: winProfit };
+      activeBetRi += numMen;
+    }
+  }
+
+  var slotResults = [];
+  for (var ri = 0; ri < ROWS.length; ri++) slotResults.push(slotMap[ROWS[ri].time]);
+  return { grandPnl: grandPnl, grandBusts: grandBusts, grandBets: grandBets, grandWins: grandWins,
+           grandSteps: grandSteps, grandStepWins: grandStepWins,
+           slotResults: slotResults, overlaysMap: overlaysMap, numMen: numMen, entryTime: entryTime };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1702,11 +1839,19 @@ function runAllSims() {
   }
 
   var combinedMode = mode, combinedMen = (mode === 'menbased') ? (parseInt(document.getElementById('menCount').value, 10) || 2) : 2;
+  var dominantWinTarget = parseInt(document.getElementById('dominantWinsIn').value, 10) || 1;
+  var dominantNumMen = (mode === 'menbased') ? (parseInt(document.getElementById('menCount').value, 10) || 2) : 1;
+
   allSimResults = {};
   for (var i = 0; i < STRATS.length; i++) {
-    var r = STRATS[i] === 'combined'
-          ? simulateCombined(combinedMode, ladder, bp, cooldown, combinedMen, gate)
-          : engine(STRATS[i], ladder);
+    var r;
+    if (STRATS[i] === 'combined') {
+      r = simulateCombined(combinedMode, ladder, bp, cooldown, combinedMen, gate);
+    } else if (STRATS[i] === 'dominant') {
+      r = simulateDominant(ladder, bp, dominantNumMen, dominantWinTarget);
+    } else {
+      r = engine(STRATS[i], ladder);
+    }
     r.grandMDs = computeChronoMDs(r.overlaysMap);
     r.bandMDs  = computeBandMDs(r.overlaysMap);
     r.dowMDs   = computeDowMDs(r.overlaysMap);
@@ -1780,6 +1925,7 @@ function renderStratCards() {
           + '<span title="' + dayLabel + '">TD <strong>' + impliedDays.toFixed(1) + '</strong></span>'
           + '<span class="' + appC + '" title="Avg profit per day (' + dayLabel + ')">APP <strong>' + appS + '</strong></span>'
           + '<span class="' + abpC + '" title="Avg busts per day (' + dayLabel + ')">ABP <strong>' + abp.toFixed(2) + '</strong></span>'
+          + (s === 'dominant' && r.entryTime ? '<span style="color:#8b949e">Entry <strong style="color:#79c0ff">' + r.entryTime + '</strong></span>' : '')
           + '</div>'
           + '<button class="btn-analytics">Analytics ↓</button>'
           + '</div></div>';
